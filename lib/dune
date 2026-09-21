@@ -1,0 +1,31 @@
+(library
+ (name wkf)
+ (public_name wkf)
+ (libraries lwt yojson atdgen-runtime ocamlgraph))
+
+; atdgen turns definition.atd into the graph types (-t) and their JSON readers
+; and writers (-j). -j-std keeps the output to standard JSON, which is what a
+; jsonb column and any other consumer expect.
+(rule
+ (targets definition_t.ml definition_t.mli)
+ (deps definition.atd)
+ (action
+  (run atdgen -t %{deps})))
+
+(rule
+ (targets definition_j.ml definition_j.mli)
+ (deps definition.atd)
+ (action
+  (run atdgen -j -j-std %{deps})))
+
+(rule
+ (targets state_t.ml state_t.mli)
+ (deps state.atd)
+ (action
+  (run atdgen -t %{deps})))
+
+(rule
+ (targets state_j.ml state_j.mli)
+ (deps state.atd)
+ (action
+  (run atdgen -j -j-std %{deps})))

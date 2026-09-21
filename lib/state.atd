@@ -1,0 +1,49 @@
+(* The state of a traversal, as the host stores it.
+
+   The engine still writes nothing: it builds this, hands it to the checkpoint
+   the host provided, and the host puts it wherever it keeps such things. What
+   this file buys is that the round trip is typed -- a state read back after a
+   service was cut is refused by field name rather than misread. *)
+
+type json <ocaml module="Yojson.Safe" t="t"> = abstract
+
+(* One visited node. Failed ones included: a trail that only kept what worked
+   would be missing the part one actually reads back. *)
+type step = {
+  node : string;
+  handler : string;
+  ~output <ocaml default="`Assoc []"> : json;
+  ?failure : string option;
+}
+
+type trail = step list
+
+type status = [
+    (* A node is in flight. If this is what a service comes back to, that node
+       was interrupted mid-work -- and what to do about it is a decision, not a
+       detail: see on_resume in definition.atd. *)
+    Running <json name="running">
+    (* Nothing is in flight; [node] is the one to run next. A state saved here
+       resumes with nothing lost and nothing repeated. *)
+  | Ready <json name="ready">
+  | Completed <json name="completed">
+  | Interrupted <json name="interrupted">
+]
+
+type state = {
+  (* The graph this traversal belongs to. Checked on resume: a state resumed
+     against another graph would walk a map of somewhere else. *)
+  graph : string;
+  status : status;
+  ?node : string option;
+  ~trail : trail;
+  ?price : int option;
+  (* How many nodes have been visited, carried across a resume so that the node
+     budget means the same thing on both sides of a cut. *)
+  ~visited : int;
+  (* The context the traversal was given. Stored so that a service which comes
+     back up has everything it needs to carry on; drop it before writing if it
+     holds what you would rather not keep, and hand it back yourself on resume. *)
+  ~context <ocaml default="`Null"> : json;
+  ?reason : string option;
+}

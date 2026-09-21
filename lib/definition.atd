@@ -1,0 +1,78 @@
+(* The wire format of a graph.
+
+   The engine consumes a graph that has already been read (see the README):
+   this file describes the JSON shape it accepts, so that a host which has no
+   PostgreSQL -- a test, a fixture, a small service -- can hand it a graph
+   without writing a reader. A host that does have the schema of
+   [schema/wkf.sql] produces the very same JSON; the [wkf_graph_json] function
+   shipped with the schema does it in one query.
+
+   The point of typing it here rather than reading a [Yojson.Safe.t] by hand is
+   the refusal: atdgen names the field it chokes on, which a hand-written
+   [member "nodes"] never does. *)
+
+(* Any JSON, carried and not inspected: a node's configuration is read by the
+   handler that owns it (see {!Wkf.Registry.HANDLER}), never by the engine. *)
+type json <ocaml module="Yojson.Safe" t="t"> = abstract
+
+(* How a node reacts to its own failure. [Stop] is the default, and that is not
+   a detail: an engine that carries on by default turns every outage into a
+   silent degradation. *)
+type on_failure = [
+    Stop     <json name="stop">
+  | Continue <json name="continue">
+  | Divert   <json name="divert">
+]
+
+(* What to do with a node that was in flight when the service was cut. *)
+type on_resume = [
+    Fail  <json name="fail">
+  | Rerun <json name="rerun">
+]
+
+type node = {
+  name : string;
+  (* The name of a handler in the registry. Checked when the graph is loaded. *)
+  handler : string;
+  (* The handler's configuration, validated by the handler's own reader when
+     the graph is loaded -- not in the middle of a traversal someone is
+     waiting for. *)
+  ~config <ocaml default="`Assoc []"> : json;
+  (* What this node can cost AT WORST, in the host's unit. Only used to compute
+     the most expensive path; the engine gives it no other meaning. *)
+  ~max_cost <ocaml default="0"> : int;
+  ~on_failure <ocaml default="`Stop"> : on_failure;
+  (* Where a [Divert] goes. Required by, and only meaningful for, [Divert]. *)
+  ?failure_target : string option;
+  (* What happens to this node when a traversal is resumed and this node was
+     the one in flight when the service was cut.
+
+     The default is the safe one: the node is deemed to have failed, and its
+     own on_failure decides what follows. Work that has already left -- a call
+     already made, a message already sent -- is not made to leave twice by the
+     engine on its own. [Rerun] says the work is idempotent and may simply be
+     done again, and saying it is an act. *)
+  ~on_resume <ocaml default="`Fail"> : on_resume;
+  (* Where a traversal begins. Exactly one node per graph carries it. *)
+  ~start : bool;
+  (* A terminal node ends the traversal once its handler has returned. *)
+  ~terminal : bool;
+}
+
+(* Where the traversal goes when the node did not name its successor itself.
+   One outgoing edge per node, and that is deliberate: the choice belongs to
+   the handlers, not to a table of conditions. *)
+type edge = {
+  from_ <json name="from"> : string;
+  to_ <json name="to"> : string;
+}
+
+type graph = {
+  name : string;
+  (* The second net: beyond this many visited nodes a traversal stops, whatever
+     happens. It catches what the acyclicity check could not -- a handler that
+     names its successors in a circle. *)
+  ~node_budget <ocaml default="50"> : int;
+  nodes : node list;
+  ~edges : edge list;
+}

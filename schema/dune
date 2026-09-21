@@ -1,0 +1,6 @@
+; The schema travels with the package: a host applies it, the engine never
+; touches it. It lands in $(opam var share)/wkf/wkf.sql.
+(install
+ (section share)
+ (package wkf)
+ (files wkf.sql))
