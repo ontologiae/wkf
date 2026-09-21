@@ -1,0 +1,16 @@
+; The separation assertion of the specification, run with the tests: a grep for
+; the names of the application this engine was extracted from must come back
+; empty. Written as a check rather than as an intention, which is the only way
+; it stays true.
+(rule
+ (alias runtest)
+ (deps
+  check_separation.sh
+  (source_tree lib)
+  (source_tree example)
+  (source_tree schema)
+  (source_tree test)
+  README.md
+  dune-project)
+ (action
+  (run bash %{dep:check_separation.sh})))

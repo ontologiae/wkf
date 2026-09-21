@@ -1,0 +1,17 @@
+digraph G {
+  rankdir=LR;
+  label="one_turn";
+  node [shape=box, style="rounded", ];
+  "done" [shape=box3d, label="done\nwork", ];
+  "note" [label="note\nwork\nmax_cost 8", ];
+  "polish" [label="polish\nwork\nmax_cost 4", style="dashed", ];
+  "study" [label="study\nwork\nmax_cost 25", ];
+  "triage" [shape=doublecircle, label="triage\ntriage\nmax_cost 1",
+            style="bold", ];
+  
+  
+  "note" -> "polish";
+  "polish" -> "done";
+  "study" -> "polish";
+  
+  }
