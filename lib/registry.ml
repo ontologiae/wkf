@@ -1,4 +1,4 @@
-type runner = context:Yojson.Safe.t -> (Yojson.Safe.t, string) result Lwt.t
+type runner = context:Yojson.Safe.t -> trail:Trail.t -> (Yojson.Safe.t, string) result Lwt.t
 
 module type HANDLER = sig
   val name : string
@@ -8,7 +8,10 @@ module type HANDLER = sig
   val read_config : Yojson.Safe.t -> config
 
   val run :
-    config:config -> context:Yojson.Safe.t -> (Yojson.Safe.t, string) result Lwt.t
+    config:config ->
+    context:Yojson.Safe.t ->
+    trail:Trail.t ->
+    (Yojson.Safe.t, string) result Lwt.t
 end
 
 (* A handler is stored with its configuration type already erased: what the
@@ -27,7 +30,7 @@ exception Duplicate of string
 let entry_of_module (module H : HANDLER) =
   let prepare config =
     match H.read_config config with
-    | config -> Ok (fun ~context -> H.run ~config ~context)
+    | config -> Ok (fun ~context ~trail -> H.run ~config ~context ~trail)
     | exception Failure msg -> Error msg
     | exception Atdgen_runtime.Oj_run.Error msg -> Error msg
     | exception Yojson.Json_error msg -> Error msg

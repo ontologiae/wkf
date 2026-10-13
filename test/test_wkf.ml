@@ -359,6 +359,51 @@ let the_context_is_carried_untouched () =
         | _ -> None)
   | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
 
+(* The other channel a node sees, alongside the context: the trail of what
+   earlier nodes of this same traversal returned. Unlike the context, it is
+   the engine's own, and it is where a decisional node's result reaches
+   whatever downstream node needs to use it, not just route past it. *)
+let a_node_reads_a_previous_nodes_output_through_the_trail () =
+  let g =
+    graph
+      [
+        node ~start:true ~config:(`Assoc [ ("tag", `String "from-a") ]) "a";
+        node ~handler:"read_trail" ~config:(`Assoc [ ("node", `String "a") ]) ~terminal:true "b";
+      ]
+      [ ("a", "b") ]
+  in
+  let loaded, _ = load_ok g in
+  match run loaded with
+  | Wkf.Engine.Completed { trail; _ } ->
+      Alcotest.(check (option string)) "b saw exactly what a returned"
+        (Some {|{"tag":"from-a"}|})
+        (match Wkf.Trail.output trail "b" with
+        | Some (`Assoc [ ("saw", v) ]) -> Some (Yojson.Safe.to_string v)
+        | _ -> None)
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
+let a_node_does_not_see_its_own_unfinished_output () =
+  (* a has not returned when its own handler runs, so there is nothing yet to
+     find under its name -- the trail passed in is what happened BEFORE this
+     node, never including it. *)
+  let g =
+    graph
+      [
+        node ~handler:"read_trail" ~config:(`Assoc [ ("node", `String "a") ]) ~start:true
+          ~terminal:true "a";
+      ]
+      []
+  in
+  let loaded, _ = load_ok g in
+  match run loaded with
+  | Wkf.Engine.Completed { trail; _ } ->
+      Alcotest.(check (option string)) "nothing found under its own name yet"
+        (Some "null")
+        (match Wkf.Trail.output trail "a" with
+        | Some (`Assoc [ ("saw", v) ]) -> Some (Yojson.Safe.to_string v)
+        | _ -> None)
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
 (* ------------------------------------------------------------------ *)
 (* Failure, node by node.                                               *)
 
@@ -633,6 +678,32 @@ let a_node_in_flight_follows_its_own_failure_policy () =
   let cut = List.find (fun (s : Wkf.State.t) -> s.node = Some "b" && s.status = `Running) !states in
   check_visited [ "a"; "b"; "fallback"; "out" ] (resume loaded cut)
 
+let a_rerun_node_still_sees_the_trail_from_before_the_cut () =
+  (* The trail a node receives comes from state.trail on a resume, not from
+     anything the walk accumulated since restarting -- this is what proves the
+     two paths (run, resume) feed the same channel. *)
+  let g =
+    graph ~name:"walk"
+      [
+        node ~start:true ~config:(`Assoc [ ("tag", `String "from-a") ]) "a";
+        node ~handler:"read_trail" ~on_resume:`Rerun ~config:(`Assoc [ ("node", `String "a") ])
+          ~terminal:true "b";
+      ]
+      [ ("a", "b") ]
+  in
+  let loaded, _ = load_ok g in
+  let states, checkpoint = recording () in
+  ignore (run ~checkpoint loaded);
+  let cut = List.find (fun (s : Wkf.State.t) -> s.node = Some "b" && s.status = `Running) !states in
+  match resume loaded cut with
+  | Wkf.Engine.Completed { trail; _ } ->
+      Alcotest.(check (option string)) "b, rerun after the cut, still sees a's output"
+        (Some {|{"tag":"from-a"}|})
+        (match Wkf.Trail.output trail "b" with
+        | Some (`Assoc [ ("saw", v) ]) -> Some (Yojson.Safe.to_string v)
+        | _ -> None)
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
 let rerun_is_something_one_has_to_write () =
   let loaded, _ = load_ok (straight_graph ~on_resume:`Rerun ()) in
   let states, checkpoint = recording () in
@@ -826,6 +897,10 @@ let () =
           case "the free fields are kept" the_output_is_kept_whole;
           case "the context is carried untouched" the_context_is_carried_untouched;
           case "a node budget catches a runtime loop" the_node_budget_stops_a_handler_that_loops;
+          case "a node reads a previous one's output through the trail"
+            a_node_reads_a_previous_nodes_output_through_the_trail;
+          case "a node never sees its own unfinished output"
+            a_node_does_not_see_its_own_unfinished_output;
         ] );
       ( "failure, node by node",
         [
@@ -851,6 +926,8 @@ let () =
           case "a state survives a round trip through JSON" a_state_survives_a_round_trip_through_json;
           case "a node in flight is deemed to have failed" a_node_in_flight_is_deemed_to_have_failed;
           case "and follows its own failure policy" a_node_in_flight_follows_its_own_failure_policy;
+          case "a rerun node still sees the trail from before the cut"
+            a_rerun_node_still_sees_the_trail_from_before_the_cut;
           case "rerunning it is something one has to write" rerun_is_something_one_has_to_write;
           case "a state between two nodes loses nothing" a_state_between_two_nodes_loses_nothing;
           case "the budget means the same on both sides" the_budget_means_the_same_on_both_sides_of_a_cut;

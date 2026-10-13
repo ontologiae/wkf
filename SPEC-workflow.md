@@ -127,7 +127,8 @@ moteur ait eu à prévoir la mesure : une fonction rend sa confiance, son coût,
 qu'elle a lu, et cela devient une requête sur du `jsonb` plutôt qu'une migration.
 
 La sortie de chaque nœud visité est empilée dans la trace de la traversée, dans
-l'ordre.
+l'ordre. Cette trace n'est pas qu'un journal pour l'hôte : les fonctions
+suivantes de la même traversée la relisent aussi — cf. §3.3.
 
 ---
 
@@ -158,7 +159,10 @@ module type FONCTION = sig
       champ fautif ; le moteur attrape et refuse le nœud en le disant. *)
 
   val executer :
-    entree:entree -> contexte:Yojson.Safe.t -> (Yojson.Safe.t, string) result Lwt.t
+    entree:entree -> contexte:Yojson.Safe.t -> trace:trace ->
+    (Yojson.Safe.t, string) result Lwt.t
+  (** [trace] : ce que les nœuds déjà visités de cette traversée ont rendu,
+      jamais le nœud courant lui-même. Cf. §3.3. *)
 end
 
 val enregistrer : (module FONCTION) -> unit
@@ -176,7 +180,32 @@ c'est-à-dire, ici, des conversations et des soldes. Le prix en est que le moteu
 ne peut rien garantir sur le contexte ; la garantie, c'est chaque fonction qui
 la pose, sur la part qui la concerne.
 
-### 3.3 Une fonction inconnue est une faute d'exploitation
+### 3.3 Ce qu'une fonction voit de la traversée en cours : la trace
+
+Le `contexte` (§3.2) est fixé une fois, par l'hôte, avant que la traversée ne
+commence, et il ne change pas d'un nœud à l'autre. Une fonction qui décide
+*et calcule quelque chose* — pas seulement « où aller », mais une valeur que la
+suite doit employer — n'a donc aucun moyen de la faire passer par ce canal : il
+faudrait la connaître avant que la traversée existe.
+
+La **trace** (§2.3) comble ce manque, à droit égal avec le contexte mais pour
+une raison inverse : le contexte est ce que l'hôte savait avant, la trace est
+ce que la traversée elle-même a déjà produit. Chaque fonction la reçoit, dans
+l'ordre où les nœuds ont été visités — jamais le nœud courant, puisqu'il n'a
+pas encore rendu —, et peut y chercher, par nom, ce qu'un nœud antérieur a
+rendu.
+
+C'est délibérément une lecture typée en OCaml, et non un petit langage de
+gabarit (`{{nœud.sortie.champ}}`, à la manière d'Argo Workflows) : chercher une
+valeur dans la trace dans le code d'une fonction se vérifie par le compilateur,
+comme n'importe quel accès à une structure de données ; un gabarit en chaîne de
+caractères, stocké en base, ne se vérifierait qu'à l'exécution — exactement le
+langage d'expressions que le §11 écarte déjà, revenu par une autre porte.
+
+La trace est donc double : rendue à l'hôte à la fin de la traversée (§2.3,
+§7), et relue par les fonctions en cours de route.
+
+### 3.4 Une fonction inconnue est une faute d'exploitation
 
 Elle ne se traite **pas** comme une panne d'exécution. Un graphe qui nomme une
 fonction absente du registre veut dire que **ce qui est écrit n'est pas ce qui
@@ -646,6 +675,12 @@ inannonçable.
 d'expressions par une autre porte. Une arête par nœud, et le choix aux
 fonctions.
 
+**Un paramétrage par gabarit** (`{{nœud.sortie.champ}}`, à la manière d'Argo
+Workflows). Cf. §3.3 : une fonction qui veut ce qu'un nœud antérieur a rendu le
+cherche dans la trace, en OCaml, vérifié par le compilateur. Un gabarit en
+chaîne stocké en base ne serait, encore, qu'un langage d'expressions revenu par
+une autre porte.
+
 **Le nom du graphe comme clé étrangère.** C'était la première version du §10 :
 une colonne de texte recopiée sur chaque nœud et chaque arête, sans table pour
 déclarer les graphes. Écarté — une faute de frappe y créait un graphe fantôme
@@ -766,48 +801,52 @@ code.** Le reste peut se corriger en chemin.
    porte `suivant`.
 5. La sortie d'un nœud est **libre**, hors trois champs réservés — `suivant`,
    `prix`, `echec` — et elle est **conservée** dans la trace.
-6. Le registre associe un **nom** à un module `FONCTION`. Une fonction inconnue
+6. **La trace est aussi relue** : chaque fonction reçoit, en plus du contexte,
+   ce que les nœuds antérieurs de la traversée ont rendu, et peut y chercher
+   une valeur par nom. C'est le canal qui manquait au contexte, fixé trop tôt
+   pour porter le résultat d'un nœud qui n'a pas encore couru.
+7. Le registre associe un **nom** à un module `FONCTION`. Une fonction inconnue
    est une **faute d'exploitation** qui crie, jamais un repli silencieux.
-7. Chaque fonction **déclare son entrée en ATD** : la souplesse du `jsonb` en
+8. Chaque fonction **déclare son entrée en ATD** : la souplesse du `jsonb` en
    base, un refus qui nomme le champ à la lecture, et la lecture a lieu **au
    chargement**.
-8. La politique d'échec est **par nœud**, déclarée : `arreter` (défaut),
+9. La politique d'échec est **par nœud**, déclarée : `arreter` (défaut),
    `poursuivre`, `devier`. Un échec se journalise toujours.
-9. Le **prix est fixé par le nœud d'entrée** et ne peut que baisser ensuite.
+10. Le **prix est fixé par le nœud d'entrée** et ne peut que baisser ensuite.
    Jamais accumulé, parce qu'un prix accumulé n'est pas annonçable.
-10. Le **chemin le plus cher doit coûter moins que le prix annoncé**. Le moteur
+11. Le **chemin le plus cher doit coûter moins que le prix annoncé**. Le moteur
     le calcule sur le DAG et **avertit** — il ne refuse pas, parce qu'il ne
     connaît pas la marge de l'hôte.
-11. Une traversée est une **transaction pour l'état et pour le prix**, jamais
+12. Une traversée est une **transaction pour l'état et pour le prix**, jamais
     pour les effets de bord déjà partis. Le coût d'une traversée avortée est une
     **perte assumée** de l'hôte.
-12. La trace est rendue **dans les deux cas**, abouti ou interrompu.
-13. **L'état courant d'une traversée s'écrit à chaque frontière de nœud**, et
+13. La trace est rendue **dans les deux cas**, abouti ou interrompu.
+14. **L'état courant d'une traversée s'écrit à chaque frontière de nœud**, et
     le moteur n'écrit toujours rien lui-même : il construit un état et le passe
     au point de reprise que l'hôte lui donne. Deux écritures par nœud — avant
     et après —, parce qu'une seule ne distingue plus « coupé en plein travail »
     de « pas encore commencé ».
-14. **Le nœud en vol à la coupure est réputé échoué**, et sa politique
+15. **Le nœud en vol à la coupure est réputé échoué**, et sa politique
     `on_failure` prend le relais. Le refaire se déclare, nœud par nœud
     (`on_resume: rerun`), parce que le moteur ne peut pas savoir si son travail
     est déjà parti — et qu'une facture double est un dégât silencieux.
-15. **Un point de reprise refusé interrompt la traversée**, la dernière
+16. **Un point de reprise refusé interrompt la traversée**, la dernière
     écriture comprise : une traversée qu'on ne peut pas enregistrer ne se
     facture pas, et sa trace revient tout de même.
-16. Les domaines fermés sont des **enums PostgreSQL**, et la migration DDL qui
+17. Les domaines fermés sont des **enums PostgreSQL**, et la migration DDL qui
     va avec est assumée.
-17. **Un graphe est une ligne avec un identifiant**, pas un nom recopié sur
+18. **Un graphe est une ligne avec un identifiant**, pas un nom recopié sur
     chaque enregistrement. Les références internes passent par des clés
     étrangères **composites**, qui empêchent une arête ou une déviation de
     sortir de son graphe — refusé à l'écriture, pas détecté en OCaml.
-18. **`ocamlgraph` fait la théorie des graphes** : cycle, composantes fortement
+19. **`ocamlgraph` fait la théorie des graphes** : cycle, composantes fortement
     connexes (pour *nommer* le cycle), ordre topologique, et le DOT qui permet
     de dessiner un graphe écrit en base. Il ne pèse que `ocaml` et `dune`, ce
     qui compte pour un paquet publié.
-19. Le moteur aura **son dépôt, son git et son paquet opam**. Il se comporte
+20. Le moteur aura **son dépôt, son git et son paquet opam**. Il se comporte
     **dès maintenant** comme s'il était déjà dehors — vérifié par assertion, pas
     par intention.
-20. Il sera **publié, donc en anglais**. Le document se traduit à l'extraction ;
+21. Il sera **publié, donc en anglais**. Le document se traduit à l'extraction ;
     **les identifiants se décident avant d'écrire du code**, parce qu'un
     renommage tardif traverse le schéma, les migrations, les tests et tous les
     commentaires qui nomment une valeur. Glossaire proposé au §12.2 — c'est le

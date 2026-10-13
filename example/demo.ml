@@ -1,5 +1,8 @@
 (* A graph read from JSON, checked, drawn, priced and walked twice.
-   Run it with: dune exec example/demo.exe *)
+   Run it with: dune exec example/demo.exe
+
+   "done" reads what "triage" decided through the trail, not through context:
+   that is how a node downstream of a decisional one gets at its result. *)
 
 (* ---- two handlers, which is all the host really owes the engine ---- *)
 
@@ -28,7 +31,7 @@ module Triage = struct
 
   let read_config = config_of_json
 
-  let run ~config ~context =
+  let run ~config ~context ~trail:_ =
     let size =
       match context with
       | `Assoc fields -> (
@@ -53,7 +56,12 @@ end
 module Work = struct
   let name = "work"
 
-  type config = { label : string; fails : bool }
+  (* [reads] names an earlier node of this same traversal whose output this
+     one wants to use -- not just route to, use. [context] cannot carry that:
+     it is fixed by the host before the traversal starts, and at that point
+     the earlier node has not run yet. The trail is the channel built for
+     exactly this, and it is the engine's own, not the host's. *)
+  type config = { label : string; fails : bool; reads : string option }
 
   let read_config = function
     | `Assoc fields ->
@@ -64,12 +72,26 @@ module Work = struct
             | _ -> failwith "field \"label\" is required");
           fails =
             (match List.assoc_opt "fails" fields with Some (`Bool b) -> b | _ -> false);
+          reads =
+            (match List.assoc_opt "reads" fields with Some (`String s) -> Some s | _ -> None);
         }
     | _ -> failwith "an object was expected"
 
-  let run ~config ~context:_ =
+  let run ~config ~context:_ ~trail =
     if config.fails then Lwt.return (Error (config.label ^ " is unavailable"))
-    else Lwt.return (Ok (`Assoc [ ("wrote", `String config.label) ]))
+    else
+      let base = [ ("wrote", `String config.label) ] in
+      let base =
+        match config.reads with
+        | None -> base
+        | Some node ->
+            (* Wkf.Trail.output looks a node up by name in what has already
+               run; [None] if that node was never visited on this path -- a
+               divert elsewhere, say. *)
+            ("read_from_" ^ node, Option.value (Wkf.Trail.output trail node) ~default:`Null)
+            :: base
+      in
+      Lwt.return (Ok (`Assoc base))
 end
 
 (* ---- the graph, as a host would have read it from its database ---- *)
@@ -93,7 +115,7 @@ let graph_json =
       "config": { "label": "the polish", "fails": true } },
 
     { "name": "done", "handler": "work", "terminal": true, "max_cost": 0,
-      "config": { "label": "handing it over" } }
+      "config": { "label": "handing it over", "reads": "triage" } }
   ],
   "edges": [
     { "from": "study",  "to": "polish" },

@@ -117,7 +117,7 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
     on_event (Event.Node_started { node = name; handler = def.handler });
     let* result =
       Lwt.catch
-        (fun () -> node.run ~context)
+        (fun () -> node.run ~context ~trail:(List.rev !trail))
         (fun exn -> Lwt.return (Error (Printexc.to_string exn)))
     in
     match result with

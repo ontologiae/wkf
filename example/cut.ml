@@ -28,7 +28,7 @@ module Work = struct
         }
     | _ -> failwith "an object was expected"
 
-  let run ~config ~context:_ =
+  let run ~config ~context:_ ~trail:_ =
     count config.label;
     Printf.printf "      [%s ran]\n%!" config.label;
     Lwt.return

@@ -10,7 +10,7 @@ module Echo = struct
   type config = Yojson.Safe.t
 
   let read_config c = c
-  let run ~config ~context:_ = Lwt.return (Ok config)
+  let run ~config ~context:_ ~trail:_ = Lwt.return (Ok config)
 end
 
 (* Fails with the message its configuration names. Also the handler whose
@@ -29,7 +29,7 @@ module Boom = struct
         | None -> failwith "field \"message\" is required")
     | _ -> failwith "an object was expected"
 
-  let run ~config ~context:_ = Lwt.return (Error config.message)
+  let run ~config ~context:_ ~trail:_ = Lwt.return (Error config.message)
 end
 
 (* Raises rather than returning [Error]: the engine must treat an exception as
@@ -40,7 +40,7 @@ module Crash = struct
   type config = unit
 
   let read_config _ = ()
-  let run ~config:_ ~context:_ = raise (Failure "the handler blew up")
+  let run ~config:_ ~context:_ ~trail:_ = raise (Failure "the handler blew up")
 end
 
 (* Reads the context, which the engine carries and never touches. *)
@@ -56,7 +56,7 @@ module Read_context = struct
         | _ -> failwith "field \"key\" is required")
     | _ -> failwith "an object was expected"
 
-  let run ~config ~context =
+  let run ~config ~context ~trail:_ =
     let value =
       match context with
       | `Assoc fields -> Option.value (List.assoc_opt config.key fields) ~default:`Null
@@ -65,10 +65,30 @@ module Read_context = struct
     Lwt.return (Ok (`Assoc [ ("seen", value) ]))
 end
 
+(* Reads what an earlier node of this same traversal returned -- the other
+   channel, the one the engine builds itself rather than the host. *)
+module Read_trail = struct
+  let name = "read_trail"
+
+  type config = { node : string }
+
+  let read_config = function
+    | `Assoc fields -> (
+        match List.assoc_opt "node" fields with
+        | Some (`String node) -> { node }
+        | _ -> failwith "field \"node\" is required")
+    | _ -> failwith "an object was expected"
+
+  let run ~config ~context:_ ~trail =
+    Lwt.return
+      (Ok (`Assoc [ ("saw", Option.value (Wkf.Trail.output trail config.node) ~default:`Null) ]))
+end
+
 let registry =
   let r = Wkf.Registry.create () in
   Wkf.Registry.register ~registry:r (module Echo);
   Wkf.Registry.register ~registry:r (module Boom);
   Wkf.Registry.register ~registry:r (module Crash);
   Wkf.Registry.register ~registry:r (module Read_context);
+  Wkf.Registry.register ~registry:r (module Read_trail);
   r

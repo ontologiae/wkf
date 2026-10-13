@@ -9,7 +9,7 @@
     @canonical Wkf.Registry *)
 
 type runner =
-  context:Yojson.Safe.t -> (Yojson.Safe.t, string) result Lwt.t
+  context:Yojson.Safe.t -> trail:Trail.t -> (Yojson.Safe.t, string) result Lwt.t
 (** A handler whose configuration has already been read. This is what the
     engine calls. *)
 
@@ -32,7 +32,10 @@ module type HANDLER = sig
       traversal. *)
 
   val run :
-    config:config -> context:Yojson.Safe.t -> (Yojson.Safe.t, string) result Lwt.t
+    config:config ->
+    context:Yojson.Safe.t ->
+    trail:Trail.t ->
+    (Yojson.Safe.t, string) result Lwt.t
   (** The work itself.
 
       [context] is built by the host and passed through untouched: the engine
@@ -41,6 +44,14 @@ module type HANDLER = sig
       force the engine to know what the application puts in it. The price is
       that the engine can guarantee nothing about the context; each handler
       guarantees what concerns it.
+
+      [trail] is the other channel, and it is the engine's own: what the nodes
+      visited so far in this traversal returned, in order, never including
+      this node itself since it has not returned yet. A node that computes a
+      value the rest of the traversal must use -- not just where to go --
+      reaches it with {!Trail.output}[ trail "some_earlier_node"]; [context]
+      cannot carry that, since it is fixed before the traversal starts and the
+      earlier node's output does not exist yet at that point.
 
       The returned JSON is free, except for three reserved fields:
 

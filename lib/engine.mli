@@ -55,6 +55,9 @@ val run :
 (** Walks the graph from its start node.
 
     [context] is built by the host and handed to every handler untouched.
+    Alongside it, every handler also receives the trail of what the nodes
+    visited so far in this traversal returned -- see
+    {!Registry.HANDLER.run}.
 
     A traversal ends when a terminal node has returned, when a handler names
     [`Null] as its successor, or -- as an interruption -- when a node fails

@@ -54,7 +54,7 @@ and then, in the consuming project:
 The SQL schema is not applied by the library. It is installed as a file, at
 `$(opam var share)/wkf/wkf.sql`, and it is yours to apply.
 
-## The nine things worth knowing
+## The ten things worth knowing
 
 **1. A node is a call to a handler, and there is only one kind of node.** The
 alternative — a "model call" nature, a "computation" nature, a "routing"
@@ -79,7 +79,14 @@ trail. That is what lets you measure a traversal without the engine having had
 to plan for the measurement: a handler returns its confidence, its cost, what
 it read, and that becomes a query over `jsonb` rather than a migration.
 
-**4. The base names, the code does.** A node carries the *name* of a handler,
+**4. That same trail is also handed back to every later handler**, alongside
+the context. `context` is fixed once by the host, before the traversal starts;
+`trail` is the engine's own, built as it walks, and it is where a decisional
+node's result reaches a downstream node that needs to *use* it, not just be
+routed by it — `Wkf.Trail.output trail "that_node"`, a typed lookup rather than
+a template string resolved at run time. See "Writing a handler" below.
+
+**5. The base names, the code does.** A node carries the *name* of a handler,
 looked up in a registry you filled at startup. This is what stands in place of
 an expression language stored in the database: what is stored is a name and
 data, never code. A name is checked when the graph is loaded; an expression is
@@ -87,7 +94,7 @@ only checked by running it, on a real traversal, at someone's expense. An
 unknown handler is an operations fault — it means what is written is not what
 runs — and it shouts rather than falling back.
 
-**5. Everything checkable is checked when the graph is loaded**, not during a
+**6. Everything checkable is checked when the graph is loaded**, not during a
 traversal someone is waiting for: handler names, every node's configuration
 (each handler reads its own, so a malformed one is refused by field name),
 exactly one start, no edge or fallback branch leaving the graph, and
@@ -96,14 +103,14 @@ graph has a cycle" helps nobody fix it. What cannot be an error is a warning:
 an unreachable node is usually a forgotten edge, but writing a graph in pieces
 is legitimate.
 
-**6. The failure policy belongs to the node**, not to the engine: `stop`
+**7. The failure policy belongs to the node**, not to the engine: `stop`
 (the default), `continue`, `divert` to a fallback branch. The default is the
 safe one — an engine that carries on by default turns every outage into a
 silent degradation; you have to *write* `continue` to get it. A failure is
 logged whatever the policy: "carry on" means the traversal goes on, never that
 we do not mention it.
 
-**7. The price is fixed once, by the first node that posts one**, and a later
+**8. The price is fixed once, by the first node that posts one**, and a later
 node may only lower it. One may deliver cheaper than promised; one may not
 deliver dearer. It is never accumulated, because a price known only at the end
 cannot be announced at the start. The engine does not know what the number
@@ -119,7 +126,7 @@ both the one that posts the price and the one that routes, expect that verdict
 and read it as what it is — the bound has to come from somewhere else, such as
 per-node costs plus a node budget you trust.
 
-**8. A traversal is a transaction for your state and for the price, never for
+**9. A traversal is a transaction for your state and for the price, never for
 side effects that have already left.** A node that called an outside service
 consumed something there, and no rollback gives it back: a traversal aborted
 after three expensive nodes *cost* three expensive nodes. There is no automatic
@@ -132,8 +139,8 @@ The trail comes back in **both** cases, completed and interrupted. The
 interrupted one is precisely the one you will want to read back; dropping it to
 keep things clean would erase the only thing that says why.
 
-**9. A traversal writes itself down as it goes, so that a service which was cut
-can pick it up.** That is the other half of point 8: since work that has
+**10. A traversal writes itself down as it goes, so that a service which was cut
+can pick it up.** That is the other half of point 9: since work that has
 already left cannot be given back, the next best thing is not to do it twice.
 Pass a `checkpoint` to `Wkf.Engine.run` and the engine hands it a
 `Wkf.State.t` at every node boundary; `Wkf.Engine.resume` takes that state back
@@ -197,7 +204,7 @@ module Draft = struct
      per node when the graph is loaded, never during a traversal. *)
   let read_config = Wkf.Registry.of_string_reader Draft_cfg_j.config_of_string
 
-  let run ~config ~context =
+  let run ~config ~context ~trail =
     let open Lwt.Syntax in
     let* text = call_whatever_you_like ~model:config.model ~context in
     Lwt.return (Ok (`Assoc [ "text", `String text; "characters", `Int (String.length text) ]))
@@ -208,6 +215,28 @@ Typing the configuration in ATD is a recommendation, not an obligation —
 `read_config` takes a `Yojson.Safe.t` and may do as it pleases, as long as it
 raises with a message that names what is wrong. But `jsonb` accepts anything,
 and a generated reader is what turns that into a refusal one can act on.
+
+`context` and `trail` are two different channels, and the difference is when
+each was fixed. `context` is built by the host once, before the traversal
+starts, and stays identical for every node. `trail` is the engine's own: the
+steps already visited in this traversal, in order, never including the node
+that is currently running (it has not returned yet). A decisional node that
+computes a value the rest of the pipeline must *use* — not just "go left or
+go right" — puts it in its own output, and a node further down reads it with
+`Wkf.Trail.output trail "that_node"`:
+
+```ocaml
+let run ~config:_ ~context:_ ~trail =
+  match Wkf.Trail.output trail "triage" with
+  | Some (`Assoc fields) -> (* whatever "triage" returned *) ...
+  | _ -> ...
+```
+
+This is a plain OCaml lookup, typed and checked by the compiler, not a
+template string resolved at run time (`{{steps.triage.outputs.x}}`, in the
+style of Argo Workflows) — the engine's rule against an expression language
+living in the database (see the spec, §11) applies here too: a string that is
+only checked by running it is exactly what this avoids.
 
 ## The graph
 
