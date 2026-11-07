@@ -30,7 +30,13 @@
 type outcome =
   | Completed of { trail : Trail.t; price : int option }
   | Interrupted of { trail : Trail.t; node : string; reason : string }
-      (** [node] is where it stopped. The trail is returned in {e both} cases. *)
+      (** [node] is where it stopped. The trail is returned in {e every} case. *)
+  | Suspended of { trail : Trail.t; node : string; reason : string; price : int option }
+      (** A node asked to go on later, through the reserved field ["suspend"]
+          (its reason). [node] is the one a {!resume} will run first; nothing is
+          in flight, and the last checkpoint said [`Suspended] there. [price] is
+          the price as it stood: whether the part already done is billed is the
+          host's decision, since only the host knows what the pause is for. *)
 
 type checkpoint = State.t -> (unit, string) result Lwt.t
 (** Where the host writes the state of a traversal down.
@@ -60,7 +66,9 @@ val run :
     {!Registry.HANDLER.run}.
 
     A traversal ends when a terminal node has returned, when a handler names
-    [`Null] as its successor, or -- as an interruption -- when a node fails
+    [`Null] as its successor, or -- as a suspension -- when a handler returns
+    ["suspend"] and there is a next node to wait at, or -- as an interruption --
+    when a node fails
     under a [`Stop] policy, when a node has no way out, when a handler names a
     node that does not exist, when a node that declares routes names a node
     they do not include or ends without a route saying it may (see
@@ -78,7 +86,9 @@ val resume :
   Loaded.t ->
   State.t ->
   (outcome, State.mismatch) result Lwt.t
-(** Picks up a traversal a cut interrupted, from the state the host wrote down.
+(** Picks up a traversal a cut interrupted, or one a node suspended, from the
+    state the host wrote down. A suspended one starts at the node it was
+    waiting at, exactly as a [`Ready] one would.
 
     The trail, the price and the number of nodes already visited come back with
     it, so the node budget means the same thing on both sides of the cut and
@@ -95,5 +105,8 @@ val resume :
 
     [Error] when the state does not belong to this graph, names a node the
     graph no longer has, or is already over -- see {!State.check}. *)
+
+val trail : outcome -> Trail.t
+(** The trail, whatever the outcome: every outcome carries one. *)
 
 val string_of_outcome : outcome -> string

@@ -35,8 +35,7 @@ let errors_of g =
 let run ?on_event ?checkpoint ?(context = `Assoc []) loaded =
   Lwt_main.run (Wkf.Engine.run ?on_event ?checkpoint loaded ~context)
 
-let visited = function
-  | Wkf.Engine.Completed { trail; _ } | Wkf.Engine.Interrupted { trail; _ } -> Wkf.Trail.visited trail
+let visited outcome = Wkf.Trail.visited (Wkf.Engine.trail outcome)
 
 let check_visited expected outcome =
   Alcotest.(check (list string)) "visited nodes" expected (visited outcome)
@@ -946,7 +945,9 @@ let ending_has_to_be_declared_too () =
     let g =
       graph ~routes [ node ~start:true ~config:(`Assoc [ ("next", `Null) ]) "a"; node ~terminal:true "out" ] [ ("a", "out") ]
     in
-    match run (fst (load_ok g)) with Wkf.Engine.Completed _ -> `Completed | Wkf.Engine.Interrupted _ -> `Interrupted
+    match run (fst (load_ok g)) with
+    | Wkf.Engine.Completed _ -> `Completed
+    | Wkf.Engine.Interrupted _ | Wkf.Engine.Suspended _ -> `Interrupted
   in
   Alcotest.(check bool) "declared routes without an end: interrupted" true (stops [ ("a", Some "out") ] = `Interrupted);
   Alcotest.(check bool) "with a route to the end: completed" true (stops [ ("a", None) ] = `Completed);
@@ -986,6 +987,93 @@ let routes_and_annotations_are_drawn () =
   Alcotest.(check bool) "the end vertex does not take the name of a node" true (has {|"triage" -> "end'"|});
   Alcotest.(check bool) "an annotation is escaped" true (has {|prompt=\"x\"|});
   Alcotest.(check bool) "the title is escaped" true (has {|say \"hi\"|})
+
+(* ------------------------------------------------------------------ *)
+(* Suspension, and how far a traversal has still to go.                 *)
+
+(* a -> check -> work -> out, where "check" asks to go on later. *)
+let pausing_graph ?(check_config = [ ("suspend", `String "balance too low") ]) ?(routes = []) () =
+  graph ~name:"pause" ~routes
+    [
+      node ~start:true ~config:(`Assoc [ ("price", `Int 20) ]) "a";
+      node ~config:(`Assoc check_config) "check";
+      node "work";
+      node ~terminal:true "out";
+    ]
+    [ ("a", "check"); ("check", "work"); ("work", "out") ]
+
+let a_node_can_suspend_the_traversal () =
+  let loaded, _ = load_ok (pausing_graph ()) in
+  let states, checkpoint = recording () in
+  let events = ref [] in
+  let outcome = Lwt_main.run (Wkf.Engine.run ~checkpoint ~on_event:(fun e -> events := e :: !events) loaded ~context:(`Assoc [])) in
+  (match outcome with
+  | Wkf.Engine.Suspended { node = "work"; reason = "balance too low"; price = Some 20; trail } ->
+      Alcotest.(check (list string)) "what was done is in the trail" [ "a"; "check" ] (Wkf.Trail.visited trail)
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o));
+  Alcotest.(check string) "the last checkpoint says where it waits" "suspended work" (List.hd (List.rev (boundaries states)));
+  Alcotest.(check (option string)) "and why" (Some "balance too low") (List.hd !states).reason;
+  Alcotest.(check bool) "an event says so" true
+    (List.exists (function Wkf.Event.Traversal_suspended { after = "check"; next = "work"; _ } -> true | _ -> false) !events)
+
+let a_suspended_traversal_resumes_where_it_waits () =
+  let loaded, _ = load_ok (pausing_graph ()) in
+  let states, checkpoint = recording () in
+  ignore (run ~checkpoint loaded);
+  let waiting = List.hd !states in
+  Alcotest.(check bool) "it is resumable" true (Wkf.State.is_resumable waiting);
+  (* through JSON, as a host reading its table back would have it *)
+  let waiting =
+    match Wkf.State.of_json_string (Wkf.State.to_json_string waiting) with Ok s -> s | Error e -> Alcotest.fail e
+  in
+  match resume loaded waiting with
+  | Wkf.Engine.Completed { trail; price } ->
+      Alcotest.(check (list string)) "nothing done twice" [ "a"; "check"; "work"; "out" ] (Wkf.Trail.visited trail);
+      Alcotest.(check (option int)) "the price came through" (Some 20) price
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
+let a_suspension_with_nothing_left_completes () =
+  let ends config =
+    let g =
+      graph ~name:"end"
+        [ node ~start:true ~config:(`Assoc config) "a"; node ~terminal:true "out" ]
+        [ ("a", "out") ]
+    in
+    run (fst (load_ok g))
+  in
+  (match ends [ ("suspend", `String "later"); ("next", `Null) ] with
+  | Wkf.Engine.Completed _ -> ()
+  | o -> Alcotest.failf "next null: %s" (Wkf.Engine.string_of_outcome o));
+  let g = graph ~name:"t" [ node ~start:true ~terminal:true ~config:(`Assoc [ ("suspend", `String "later") ]) "a" ] [] in
+  match run (fst (load_ok g)) with
+  | Wkf.Engine.Completed _ -> ()
+  | o -> Alcotest.failf "terminal: %s" (Wkf.Engine.string_of_outcome o)
+
+let a_suspension_still_obeys_the_routes () =
+  (* The node names an undeclared successor and asks to suspend: the route
+     check wins, a pause is not a way around it. *)
+  let g =
+    pausing_graph ~routes:[ ("check", Some "work") ]
+      ~check_config:[ ("suspend", `String "later"); ("next", `String "out") ] ()
+  in
+  match run (fst (load_ok g)) with
+  | Wkf.Engine.Interrupted { node = "check"; _ } -> ()
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
+let a_broken_suspend_field_interrupts () =
+  match run (fst (load_ok (pausing_graph ~check_config:[ ("suspend", `Int 3) ] ()))) with
+  | Wkf.Engine.Interrupted { node = "check"; reason; _ } ->
+      Alcotest.(check bool) "the reason names the field" true
+        (try ignore (Str.search_forward (Str.regexp_string "suspend") reason 0); true with Not_found -> false)
+  | o -> Alcotest.failf "unexpected: %s" (Wkf.Engine.string_of_outcome o)
+
+let steps_left_are_counted () =
+  let loaded, _ = load_ok (straight_graph ~on_failure:`Divert ()) in
+  (* a -> b -> out, and b may divert to fallback -> out: four at most from a *)
+  Alcotest.(check (option int)) "from the start" (Some 4) (Wkf.Cost.steps_from loaded "a");
+  Alcotest.(check (option int)) "from b" (Some 3) (Wkf.Cost.steps_from loaded "b");
+  Alcotest.(check (option int)) "from a terminal" (Some 1) (Wkf.Cost.steps_from loaded "out");
+  Alcotest.(check (option int)) "from nowhere" None (Wkf.Cost.steps_from loaded "nowhere")
 
 (* ------------------------------------------------------------------ *)
 
@@ -1065,6 +1153,15 @@ let () =
           case "a completion that cannot be written down" a_completion_that_cannot_be_written_down_is_not_a_completion;
           case "a state that does not fit is refused" a_state_is_refused_when_it_does_not_fit;
           case "a resumed traversal writes its own state" a_resumed_traversal_writes_its_own_state_down;
+        ] );
+      ( "suspension",
+        [
+          case "a node can suspend the traversal" a_node_can_suspend_the_traversal;
+          case "it resumes where it waits" a_suspended_traversal_resumes_where_it_waits;
+          case "with nothing left, it completes" a_suspension_with_nothing_left_completes;
+          case "it still obeys the routes" a_suspension_still_obeys_the_routes;
+          case "a broken field interrupts" a_broken_suspend_field_interrupts;
+          case "steps left are counted" steps_left_are_counted;
         ] );
       ("the registry", [ case "a name is registered once" registering_a_name_twice_is_refused ]);
       ( "declared routes",

@@ -28,6 +28,14 @@ type status = [
   | Ready <json name="ready">
   | Completed <json name="completed">
   | Interrupted <json name="interrupted">
+    (* A node asked to stop here and go on later -- the rest of the work
+       waits for something only the host knows about (a balance topped up, a
+       person who confirms). [node] is the one to run next, as for [Ready]:
+       nothing is in flight. The difference with [Ready] is who resumes it. A
+       service coming back up resumes what was [Running] or [Ready], because a
+       cut is not a decision; it leaves a [Suspended] traversal alone, because
+       a suspension is one. *)
+  | Suspended <json name="suspended">
 ]
 
 type state = {

@@ -73,8 +73,8 @@ the next one:
 A decision function and a computing function are therefore the same object, and
 a function that computes *and then* decides is not a special case.
 
-**3. A handler's output is free, apart from three reserved fields** — `next`,
-`price` and `failure`. Everything else is opaque to the engine and kept in the
+**3. A handler's output is free, apart from four reserved fields** — `next`,
+`price`, `failure` and `suspend`. Everything else is opaque to the engine and kept in the
 trail. That is what lets you measure a traversal without the engine having had
 to plan for the measurement: a handler returns its confidence, its cost, what
 it read, and that becomes a query over `jsonb` rather than a migration.
@@ -173,6 +173,21 @@ or raises, the traversal is interrupted, naming the node and the message. That
 includes the final one — a traversal whose completion could not be written down
 comes back interrupted and therefore unbilled, with its trail intact, rather
 than having you bill for something your own books never recorded.
+
+A node can also stop a traversal on purpose and have it go on later: its
+output carries `"suspend": "<reason>"`. The node's own work is done, the next
+node is chosen as usual (`next`, or the declared edge, under the same route
+checks), and the traversal stops in front of it: the outcome is
+`Wkf.Engine.Suspended`, the last checkpoint says `suspended` at that next
+node, and `Wkf.Engine.resume` starts there when you decide -- a balance topped
+up, a person who confirmed. `wkf_resumable` leaves suspended traversals out on
+purpose: a cut is not a decision, a suspension is one, and a restart must not
+take it back. A node asking to suspend with nothing left to run (terminal, or
+`next` null) just completes, with a warning event.
+
+While a traversal runs, the `running` checkpoint names the node being worked
+on and the visit count; `Wkf.Cost.steps_from` gives the most nodes left from
+there, which is what "step k of at most n" needs.
 
 ## What you provide
 

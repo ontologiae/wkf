@@ -30,6 +30,12 @@ type t =
   | Checkpoint_refused of { node : string; message : string }
   | Traversal_completed of { price : int option; visited : int }
   | Traversal_interrupted of { node : string; reason : string }
+  | Traversal_suspended of { after : string; next : string; reason : string }
+      (** [after] asked for it; [next] is where a resume will start. *)
+  | Suspension_ignored of { node : string; reason : string }
+      (** A node asked to suspend with nothing left to run -- it is terminal,
+          or it ended the traversal. The traversal completes: there is no
+          "later" to wait for. *)
 
 val level : t -> [ `Info | `Warning | `Error ]
 val to_string : t -> string

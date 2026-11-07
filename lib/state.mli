@@ -33,7 +33,9 @@
     @canonical Wkf.State *)
 
 type status = State_t.status
-(** [`Running], [`Ready], [`Completed] or [`Interrupted]. *)
+(** [`Running], [`Ready], [`Completed], [`Interrupted] or [`Suspended]. A
+    suspended traversal waits, at the node named in [node], for its host to
+    resume it; nothing is in flight. *)
 
 type t = State_t.state = {
   graph : string;  (** the graph this traversal belongs to *)
@@ -54,8 +56,10 @@ val to_json_string : ?pretty:bool -> t -> string
 val string_of_status : status -> string
 
 val is_resumable : t -> bool
-(** True for [`Running] and [`Ready]. A traversal that is over is over: picking
-    one up again would run its nodes a second time. *)
+(** True for [`Running], [`Ready] and [`Suspended]. A traversal that is over is
+    over: picking one up again would run its nodes a second time. What resumes
+    a suspended one is the host's decision, never a service restart: see
+    [wkf_resumable] in [schema/wkf.sql], which lists only the first two. *)
 
 type mismatch =
   | Other_graph of { state : string; graph : string }

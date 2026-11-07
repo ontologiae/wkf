@@ -175,5 +175,5 @@ let () =
       match outcome with
       | Wkf.Engine.Completed { trail; _ } ->
           print_endline ("  trail: " ^ Yojson.Safe.to_string (Wkf.Trail.to_json trail))
-      | Wkf.Engine.Interrupted _ -> ())
+      | Wkf.Engine.Interrupted _ | Wkf.Engine.Suspended _ -> ())
     [ "how are you?"; "would you walk me through what this does, at some length, please?" ]

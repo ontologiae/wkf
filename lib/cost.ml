@@ -19,6 +19,22 @@ let table_of t =
     (Dag.reverse_topological dag);
   cost
 
+(* The same fold, with every node weighing one: the most nodes a traversal can
+   still visit from a node, that node included. *)
+let steps_table t =
+  let dag = Dag.of_definition (Loaded.graph t) in
+  let steps = Hashtbl.create 16 in
+  let steps_of v = Option.value (Hashtbl.find_opt steps v) ~default:0 in
+  List.iter
+    (fun v ->
+      let worst = List.fold_left (fun acc s -> max acc (steps_of s)) 0 (Dag.successors dag v) in
+      Hashtbl.replace steps v (1 + worst))
+    (Dag.reverse_topological dag);
+  steps
+
+let steps_from t name =
+  match Loaded.find t name with None -> None | Some _ -> Hashtbl.find_opt (steps_table t) name
+
 let of_node t name =
   match Loaded.find t name with None -> None | Some _ -> Hashtbl.find_opt (table_of t) name
 

@@ -27,8 +27,9 @@ let string_of_status = function
   | `Ready -> "ready"
   | `Completed -> "completed"
   | `Interrupted -> "interrupted"
+  | `Suspended -> "suspended"
 
-let is_resumable t = match t.status with `Running | `Ready -> true | _ -> false
+let is_resumable t = match t.status with `Running | `Ready | `Suspended -> true | _ -> false
 
 type mismatch =
   | Other_graph of { state : string; graph : string }

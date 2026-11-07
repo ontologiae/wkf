@@ -543,6 +543,40 @@ tables tiennent encore pour vivantes. Celles en `en vol` ont été coupées en
 plein nœud ; ce qu'il advient de ce nœud est écrit dans le graphe (§8.3), et le
 moteur l'applique.
 
+### 8.7 Suspendre une traversée, et la reprendre plus tard (7 novembre 2026)
+
+Une coupure n'est pas la seule raison de reprendre une traversée. Un nœud peut
+constater que la suite doit attendre une chose que seul l'hôte connaît : un
+solde rechargé, une personne qui confirme. Avant cette section, il n'avait que
+trois issues — finir, échouer, router — et l'échec rend une traversée
+interrompue, donc non reprenable (§8.5) : la suite devait se rejouer depuis le
+début, en repayant ce qui l'avait été.
+
+Un nœud **suspend** la traversée par le champ réservé `suspend` de sa sortie,
+qui porte la raison. Son propre travail est fait ; le nœud suivant est choisi
+comme d'ordinaire (`next`, ou l'arête déclarée, sous le contrôle des routes du
+§2.2 bis), et la traversée s'arrête devant lui. Le dernier point de reprise
+porte le statut `suspended` à ce nœud suivant, avec la raison ; l'issue rendue
+est `Suspended`, avec la trace et le prix tels qu'ils sont. La reprise part de
+ce nœud exactement comme d'un `ready` : rien n'était en vol.
+
+La différence avec `ready` est **qui reprend**. Un service qui redémarre reprend
+ce qui était `running` ou `ready`, parce qu'une coupure n'est pas une décision
+(vue `wkf_resumable`) ; il laisse une traversée `suspended`, parce qu'une
+suspension en est une, et qu'un redémarrage ne doit pas la défaire. C'est
+l'hôte qui la retrouve (`status = 'suspended'`) quand ce qu'elle attend est
+arrivé.
+
+Un nœud qui demande à suspendre sans rien après lui — terminal, ou `next` à
+`null` — achève la traversée, et un événement le dit : il n'y a pas de « plus
+tard » à attendre. Facturer la partie déjà faite reste l'affaire de l'hôte, qui
+seul sait à quoi sert la pause.
+
+Pour l'avancement pendant qu'une traversée tourne, rien n'est à ajouter au
+moteur : le point de reprise `running` est écrit **avant** chaque nœud, avec son
+nom et le nombre de nœuds visités. `Cost.steps_from` donne le plus grand nombre
+de nœuds qui restent depuis là, de quoi afficher « étape k sur au plus n ».
+
 ---
 
 ## 9. Ce que l'hôte doit fournir
@@ -884,6 +918,9 @@ code.** Le reste peut se corriger en chemin.
 16. **Un point de reprise refusé interrompt la traversée**, la dernière
     écriture comprise : une traversée qu'on ne peut pas enregistrer ne se
     facture pas, et sa trace revient tout de même.
+16 bis. **Un nœud peut suspendre la traversée** (`suspend`) : elle s'arrête
+    devant le nœud suivant, au statut `suspended`, et c'est l'hôte, jamais un
+    redémarrage, qui la reprend (§8.7).
 17. Les domaines fermés sont des **enums PostgreSQL**, et la migration DDL qui
     va avec est assumée.
 18. **Un graphe est une ligne avec un identifiant**, pas un nom recopié sur

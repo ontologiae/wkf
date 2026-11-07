@@ -53,7 +53,7 @@ module type HANDLER = sig
       cannot carry that, since it is fixed before the traversal starts and the
       earlier node's output does not exist yet at that point.
 
-      The returned JSON is free, except for three reserved fields:
+      The returned JSON is free, except for four reserved fields:
 
       - ["next"]: a node name, or [`Null] to end the traversal here. This is
         all there is to routing: a node routes when its output names the next
@@ -63,6 +63,11 @@ module type HANDLER = sig
       - ["failure"]: a message. Returning it is the same as returning
         [Error msg] -- it is there for a handler that wants to report a failure
         alongside other fields.
+      - ["suspend"]: a reason. The node has done its work, and the traversal
+        stops before the next node -- the one ["next"] or the declared edge
+        names, under the same route checks -- to be resumed later by the host
+        ({!Engine.resume}). With no next node (terminal, or ["next"] null) there
+        is nothing to wait for, and the traversal completes.
 
       Everything else is opaque to the engine and kept in the trail. *)
 end

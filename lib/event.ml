@@ -18,11 +18,13 @@ type t =
   | Checkpoint_refused of { node : string; message : string }
   | Traversal_completed of { price : int option; visited : int }
   | Traversal_interrupted of { node : string; reason : string }
+  | Traversal_suspended of { after : string; next : string; reason : string }
+  | Suspension_ignored of { node : string; reason : string }
 
 let level = function
   | Node_failed _ | Traversal_interrupted _ | Budget_exhausted _ | Checkpoint_refused _ -> `Error
   | Node_rerun_after_cut _ -> `Warning
-  | Price_raise_refused _ | Terminal_named_next _ -> `Warning
+  | Price_raise_refused _ | Terminal_named_next _ | Suspension_ignored _ -> `Warning
   | _ -> `Info
 
 let to_string = function
@@ -60,3 +62,9 @@ let to_string = function
         (match price with None -> "unset" | Some p -> string_of_int p)
   | Traversal_interrupted { node; reason } ->
       Printf.sprintf "traversal interrupted at node %S: %s" node reason
+  | Traversal_suspended { after; next; reason } ->
+      Printf.sprintf "traversal suspended after node %S, to resume at %S: %s" after next reason
+  | Suspension_ignored { node; reason } ->
+      Printf.sprintf
+        "node %S asked to suspend (%s) with nothing left to run; the traversal completes instead"
+        node reason

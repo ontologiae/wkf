@@ -32,10 +32,17 @@ end $$;
 -- Where a traversal stands. 'ready' means nothing is in flight and the node
 -- named is the one to run next; 'running' means that node was working when the
 -- row was last written, which is what a service finds after a cut.
+-- 'suspended' means a node asked to go on later: nothing is in flight, the node
+-- named is the one to run next, and only the host decides when.
 do $$ begin
-  create type wkf_traversal_status as enum ('running', 'ready', 'completed', 'interrupted');
+  create type wkf_traversal_status as enum ('running', 'ready', 'completed', 'interrupted', 'suspended');
 exception when duplicate_object then null;
 end $$;
+
+-- A database created before 'suspended' existed receives it here. Outside the
+-- DO block on purpose: the value may not be used in the transaction that adds
+-- it, and psql runs each statement of this file in its own.
+alter type wkf_traversal_status add value if not exists 'suspended';
 
 -- A graph is a row with an identity, not a name copied onto every node and
 -- every edge. A text column copied around is relational in appearance only: no
@@ -252,6 +259,9 @@ create index if not exists wkf_traversal_unfinished
 -- What a service reads when it comes back up: the traversals its own tables
 -- still call live. Those in 'running' were cut mid-node; what becomes of that
 -- node is written in wkf_node.on_resume, and the engine applies it.
+-- 'suspended' is left out deliberately: a cut is not a decision, a suspension
+-- is one, and a restart must not take it back. The host finds its suspended
+-- traversals itself (status = 'suspended') when what they wait for has come.
 create or replace view wkf_resumable as
   select t.id, g.name as graph, t.status, t.node, t.visited, t.price, t.updated_at
   from wkf_traversal t join wkf_graph g on g.id = t.graph_id

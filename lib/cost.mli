@@ -26,6 +26,15 @@ val open_nodes : Loaded.t -> string list
     They are not a mistake -- a routing node is the ordinary shape of an entry
     node -- but they are why {!check_price} has a third verdict. *)
 
+val steps_from : Loaded.t -> string -> int option
+(** The most nodes a traversal can still visit from this node, the node itself
+    included, through declared edges, fallback branches and declared routes --
+    what a host shows as "step k of at most n" while a traversal runs: [k] is
+    the visit count the checkpoint carries, [n] is [k - 1 +] this, read at the
+    node being visited. The same caveat as the cost applies: past an
+    {!open_nodes} node it is a lower bound. [None] for a node the graph does
+    not have. *)
+
 val of_node : Loaded.t -> string -> int option
 (** [of_node t name] is the cost of the most expensive path starting at [name],
     including [name]'s own [max_cost]. [None] if there is no such node.

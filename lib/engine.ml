@@ -1,6 +1,7 @@
 type outcome =
   | Completed of { trail : Trail.t; price : int option }
   | Interrupted of { trail : Trail.t; node : string; reason : string }
+  | Suspended of { trail : Trail.t; node : string; reason : string; price : int option }
 
 type checkpoint = State.t -> (unit, string) result Lwt.t
 
@@ -63,6 +64,17 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
            completed would have the host bill a traversal its own books do not
            know about. *)
         refused node message
+  in
+  (* Asked for by the node that just returned, once the next node is known:
+     the state is written as [`Suspended] at that next node, with the reason,
+     and the walk stops there. A resume starts it as it would a [`Ready] one. *)
+  let suspended after next reason =
+    let* saved = save ~node:next ~reason `Suspended in
+    match saved with
+    | Error message -> refused next message
+    | Ok () ->
+        on_event (Event.Traversal_suspended { after; next; reason });
+        Lwt.return (Suspended { trail = List.rev !trail; node = next; reason; price = !price })
   in
   let checkpointed ?node status k =
     let* saved = save ?node status in
@@ -147,9 +159,31 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
     let def = node.definition in
     on_event (Event.Node_finished { node = name; handler = def.handler });
     push { Trail.node = name; handler = def.handler; output; failure = None };
-    match apply_price name output with
-    | Error reason -> interrupted name reason
-    | Ok () -> (
+    (* ["suspend"]: carry on later. Read before routing, applied after it: the
+       node that asks still decides where the traversal goes, and the route
+       checks still hold -- a suspension is a pause on the way, not a way
+       around the declared routes. *)
+    let suspend =
+      match field output "suspend" with
+      | None | Some `Null -> Ok None
+      | Some (`String reason) -> Ok (Some reason)
+      | Some other ->
+          Error
+            (Printf.sprintf "reserved field \"suspend\" is %s, and a string (the reason) was expected"
+               (Yojson.Safe.to_string other))
+    in
+    let ends () =
+      (match suspend with
+      | Ok (Some reason) -> on_event (Event.Suspension_ignored { node = name; reason })
+      | _ -> ());
+      completed name
+    in
+    let advance next =
+      match suspend with Ok (Some reason) -> suspended name next reason | _ -> go name next
+    in
+    match (apply_price name output, suspend) with
+    | Error reason, _ | _, Error reason -> interrupted name reason
+    | Ok (), Ok _ -> (
         (* A node routes when its output names the next one, whatever the
            declared edge says. That is all there is to routing: there is no
            node nature for it. *)
@@ -157,14 +191,14 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
         | Some (`String next) ->
             if def.terminal then (
               on_event (Event.Terminal_named_next { node = name; ignored = next });
-              completed name)
+              ends ())
             else if not (may_name node next) then
               interrupted name
                 (Printf.sprintf
                    "the node named %S as its successor, which is neither its declared edge nor one \
                     of its declared routes (%s)"
                    next (declared node))
-            else go name next
+            else advance next
         | Some `Null when (not def.terminal) && node.routes <> None && not node.may_end ->
             (* A node that wrote down where it may go, and did not write that it
                may stop: stopping is a route like the others. *)
@@ -173,13 +207,13 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
                  "the node ended the traversal (\"next\": null), which its declared routes (%s) do \
                   not allow"
                  (declared node))
-        | Some `Null -> completed name
+        | Some `Null -> ends ()
         | Some other ->
             interrupted name
               (Printf.sprintf
                  "reserved field \"next\" is %s, and a node name or null was expected"
                  (Yojson.Safe.to_string other))
-        | None -> if def.terminal then completed name else follow name node)
+        | None -> if def.terminal then ends () else follow ~advance name node)
   and failed name (node : Loaded.node) ~output message =
     let def = node.definition in
     (* Always, whatever the policy: "carry on" means the traversal goes on,
@@ -197,9 +231,9 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
         match def.failure_target with
         | Some target -> go name target
         | None -> interrupted name "set to divert on failure but names no failure_target")
-  and follow name (node : Loaded.node) =
+  and follow ?advance name (node : Loaded.node) =
     match node.edge with
-    | Some next -> go name next
+    | Some next -> ( match advance with Some f -> f next | None -> go name next)
     | None ->
         interrupted name
           "the node is not terminal, has no outgoing edge, and its handler named no successor"
@@ -255,6 +289,9 @@ let resume ?on_event ?checkpoint ?context loaded (state : State.t) =
       in
       Lwt.return (Ok outcome)
 
+let trail = function
+  | Completed { trail; _ } | Interrupted { trail; _ } | Suspended { trail; _ } -> trail
+
 let string_of_outcome = function
   | Completed { trail; price } ->
       Printf.sprintf "completed through %s, price %s"
@@ -262,4 +299,7 @@ let string_of_outcome = function
         (match price with None -> "unset" | Some p -> string_of_int p)
   | Interrupted { trail; node; reason } ->
       Printf.sprintf "interrupted at %S (%s) after %s" node reason
+        (String.concat " -> " (Trail.visited trail))
+  | Suspended { trail; node; reason; _ } ->
+      Printf.sprintf "suspended before %S (%s) after %s" node reason
         (String.concat " -> " (Trail.visited trail))
