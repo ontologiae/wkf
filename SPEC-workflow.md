@@ -112,6 +112,43 @@ fonction qui calcule *puis* décide — « j'ai regardé ce qu'on me demande, va
 nœud de synastrie » — n'est pas un cas particulier : c'est une fonction dont la
 sortie porte les deux.
 
+### 2.2 bis Les routes déclarées (7 novembre 2026)
+
+Un routage que rien n'écrit est invisible à tout contrôle statique : le refus de
+cycle ne le voit pas, le chemin le plus cher non plus, l'avertissement d'orphelin
+désigne à tort les nœuds routés, et le dessin n'a pas de flèche à tracer. Le seul
+filet était le plafond de nœuds visités, c'est-à-dire l'exécution.
+
+Un graphe **peut donc déclarer les routes** d'un nœud : les nœuds que sa fonction
+a le droit de nommer dans `next`, et, par une route sans destination, le droit de
+finir la traversée (`next: null`). Une route **n'est jamais suivie par défaut** :
+l'arête déclarée reste le seul défaut, et un nœud peut déclarer plusieurs routes
+là où il n'a qu'une arête.
+
+```
+  routes du nœud            sortie            ce que le moteur en fait
+  ────────────────────────  ────────────────  ─────────────────────────────────
+  aucune                    tout              comme avant : tout nœud est nommable
+  vers « a », « b »         { "next": "a" }   on va en « a »
+  vers « a », « b »         { "next": "c" }   interrompue : « c » n'est pas déclaré
+  vers « a », « b »         { "next": null }  interrompue : la fin n'est pas déclarée
+  vers « a », et la fin     { "next": null }  achevée
+  vers « a »                {  }              on suit l'arête déclarée
+```
+
+Ce que la déclaration apporte : les routes entrent dans le DAG, donc dans le
+refus de cycle (une route qui remonte est un cycle nommé au chargement, et non
+plus un plafond atteint à l'exécution) et dans le chemin le plus cher (un nœud
+qui déclare ses routes n'est plus « ouvert », et le prix se contrôle de nouveau
+contre une vraie borne) ; un nœud routé n'est plus signalé orphelin ; le dessin
+trace les routes en pointillé et la fin par un petit sommet « end ». Ce qu'elle
+coûte : le moteur tient la fonction à ce qu'elle a déclaré, et une route oubliée
+interrompt la traversée en nommant la destination non déclarée. C'est le même
+principe que le registre : ce qui est écrit est ce qui s'exécute.
+
+Un nœud qui ne déclare aucune route route librement : les graphes antérieurs
+restent valides tels quels.
+
 ### 2.3 La sortie est libre, sauf trois champs
 
 ```
@@ -626,6 +663,18 @@ n'atteint et qui n'est pas le départ. Ce n'est pas une faute — on écrit un
 graphe par morceaux — mais c'est un **avertissement** que le chargement doit
 donner, parce qu'un nœud inaccessible est presque toujours une arête oubliée.
 
+**Les routes** (§2.2 bis) vivent dans `wkf_route (graph_id, from_node,
+to_node)`, avec les deux clés étrangères composites de `wkf_edge` ; `to_node`
+nul dit « peut finir ici », et deux index uniques partiels (une ligne par
+destination, une « fin » par nœud) remplacent `UNIQUE NULLS NOT DISTINCT`, qui
+exigerait PostgreSQL 15. `wkf_graph_json` les rend dans le champ `routes`.
+
+**Le schéma se rejoue** : les types `enum` sont créés dans des blocs `DO` qui
+ignorent `duplicate_object`, faute de `CREATE TYPE … IF NOT EXISTS` dans
+PostgreSQL. Avant cela, une seconde application s'arrêtait au premier type, et
+un hôte ne pouvait que sauter le fichier entier — donc ne jamais recevoir une
+table ajoutée ensuite, comme `wkf_route`.
+
 ### 10.3 La théorie des graphes ne se réécrit pas — `ocamlgraph`
 
 Le dépôt a pour règle de ne pas réécrire ce qu'une bibliothèque fait déjà. Elle
@@ -798,7 +847,9 @@ code.** Le reste peut se corriger en chemin.
    pas de nature « appel de modèle » dans le moteur — le modèle est une fonction
    de l'hôte, ce qui rend le changement de fournisseur indolore.
 4. **Le routage n'est pas une nature à part** : un nœud route quand sa sortie
-   porte `suivant`.
+   porte `suivant`. Ses **routes peuvent se déclarer** (§2.2 bis) : elles
+   entrent alors dans les contrôles statiques et le dessin, et le moteur tient
+   la fonction à ce qu'elle a déclaré.
 5. La sortie d'un nœud est **libre**, hors trois champs réservés — `suivant`,
    `prix`, `echec` — et elle est **conservée** dans la trace.
 6. **La trace est aussi relue** : chaque fonction reçoit, en plus du contexte,

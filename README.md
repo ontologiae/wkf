@@ -256,8 +256,21 @@ Either as JSON (`Wkf.Graph.of_json_string`):
     { "name": "done", "handler": "work", "terminal": true }
   ],
   "edges": [ { "from": "study", "to": "done" },
-             { "from": "note",  "to": "done" } ] }
+             { "from": "note",  "to": "done" } ],
+  "routes": [ { "from": "triage", "to": "study" },
+              { "from": "triage", "to": "note" } ] }
 ```
+
+`routes` is optional. It declares where a node's handler *may* send the
+traversal through `"next"` -- a route without `"to"` says it may end it with
+`"next": null`. A route is never taken by default; the declared edge stays the
+only default. Once a node declares routes, the cycle check, the most expensive
+path, the orphan warning and the drawing all see them, and the engine holds the
+handler to them: naming an undeclared node, or ending when no route says it
+may, interrupts the traversal with the name of what was not declared. A node
+that declares no route routes freely, as before. In OCaml the route fields are
+`from_node` and `to_node`, so that `{ Wkf.Graph.from_; to_ }` still builds an
+edge.
 
 or built in OCaml — the types are records, `Wkf.Graph.node` and
 `Wkf.Graph.graph`, and nothing forces you through JSON.
@@ -269,8 +282,16 @@ allows exactly one start per graph. The `wkf_graph_json(text)` function it
 defines returns a graph in exactly the JSON above, so reading a graph from
 PostgreSQL is one query and no mapping code.
 
+The schema can be applied again on a database that already has it (enum types
+are created in `DO` blocks), which is how a host picks up a table a newer
+version adds -- `wkf_route`, for the declared routes.
+
 `Wkf.Dot.to_file` writes the graph as DOT. A graph written in a database and
-never looked at is a graph whose shape nobody checks.
+never looked at is a graph whose shape nobody checks. Routes are dotted arrows,
+the end of a traversal a small `end` vertex, and `?annotate` adds the host's own
+lines to a node's label -- what its configuration says, which only the host
+knows how to read. Every label is escaped: Graphviz takes a double quote as the
+end of a label, and does not complain.
 
 ## Running the example, and the tests
 

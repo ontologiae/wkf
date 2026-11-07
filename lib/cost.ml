@@ -28,8 +28,10 @@ let table t =
   Hashtbl.fold (fun k v acc -> (k, v) :: acc) (table_of t) []
   |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
-(* A node with no declared edge and no terminal flag has to be routed by its
-   handler: nothing written down says where it goes. Any node may in fact route
+(* A node with no declared edge, no declared route and no terminal flag has to
+   be routed by its handler: nothing written down says where it goes. A node
+   that declares its routes is not open -- the engine holds it to them, so the
+   most expensive path through them is a real bound. Any node may in fact route
    -- a handler can name a successor whether or not an edge exists -- but this
    is the case the graph itself makes unavoidable, and it is the one worth
    naming. *)
@@ -42,10 +44,16 @@ let open_nodes t =
     || List.exists
          (fun (n : Definition.node) -> n.failure_target = Some name)
          g.nodes
+    || List.exists (fun (r : Definition.route) -> r.to_node = Some name) g.routes
   in
   List.filter_map
     (fun (n : Definition.node) ->
-      if (not n.terminal) && Definition.successor g n.name = None && reachable n.name then
+      if
+        (not n.terminal)
+        && Definition.successor g n.name = None
+        && Definition.routes_from g n.name = []
+        && reachable n.name
+      then
         Some n.name
       else None)
     g.nodes

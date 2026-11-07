@@ -13,5 +13,7 @@ digraph G {
   "note" -> "polish";
   "polish" -> "done";
   "study" -> "polish";
+  "triage" -> "note" [fontsize=10, label="route", style="dotted", ];
+  "triage" -> "study" [fontsize=10, label="route", style="dotted", ];
   
   }

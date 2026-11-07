@@ -96,6 +96,19 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
           (Printf.sprintf "reserved field \"price\" is %s, and an integer was expected"
              (Yojson.Safe.to_string other))
   in
+  (* A node that declares routes is held to them; one that declares none
+     routes freely, as it always did. The declared edge is always allowed:
+     naming it is only saying out loud what would have happened anyway. *)
+  let may_name (node : Loaded.node) next =
+    match node.routes with
+    | None -> true
+    | Some targets -> List.mem next targets || node.edge = Some next
+  in
+  let declared (node : Loaded.node) =
+    let targets = Option.value node.routes ~default:[] in
+    String.concat ", "
+      (List.map (Printf.sprintf "%S") targets @ if node.may_end then [ "the end" ] else [])
+  in
   let rec visit name =
     if !visited >= budget then (
       on_event (Event.Budget_exhausted { node = name; budget });
@@ -145,7 +158,21 @@ let walk ?(on_event = fun _ -> ()) ?checkpoint loaded ~context ~entry ~trail0 ~p
             if def.terminal then (
               on_event (Event.Terminal_named_next { node = name; ignored = next });
               completed name)
+            else if not (may_name node next) then
+              interrupted name
+                (Printf.sprintf
+                   "the node named %S as its successor, which is neither its declared edge nor one \
+                    of its declared routes (%s)"
+                   next (declared node))
             else go name next
+        | Some `Null when (not def.terminal) && node.routes <> None && not node.may_end ->
+            (* A node that wrote down where it may go, and did not write that it
+               may stop: stopping is a route like the others. *)
+            interrupted name
+              (Printf.sprintf
+                 "the node ended the traversal (\"next\": null), which its declared routes (%s) do \
+                  not allow"
+                 (declared node))
         | Some `Null -> completed name
         | Some other ->
             interrupted name

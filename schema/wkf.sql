@@ -8,18 +8,34 @@
 -- Closed domains are enums rather than text: a closed domain belongs in the
 -- type. The counterpart is assumed -- a new value is an ALTER TYPE ... ADD
 -- VALUE, that is a migration, where a lookup table would have taken an INSERT.
+--
+-- The whole file can be applied again on a database that already has it, and
+-- that is how a host picks up what a newer version adds: tables are "if not
+-- exists", functions and views "or replace". CREATE TYPE has no "if not
+-- exists" in PostgreSQL, hence the DO blocks below -- without them a second
+-- application stopped at the first type, and a host could only guard the whole
+-- file, never receiving a table added later.
 
-create type wkf_on_failure as enum ('stop', 'continue', 'divert');
+do $$ begin
+  create type wkf_on_failure as enum ('stop', 'continue', 'divert');
+exception when duplicate_object then null;
+end $$;
 
 -- What to do with a node that was in flight when the service was cut. The
 -- default is the safe one: work that may already have left is not made to
 -- leave twice on the engine's own initiative.
-create type wkf_on_resume as enum ('fail', 'rerun');
+do $$ begin
+  create type wkf_on_resume as enum ('fail', 'rerun');
+exception when duplicate_object then null;
+end $$;
 
 -- Where a traversal stands. 'ready' means nothing is in flight and the node
 -- named is the one to run next; 'running' means that node was working when the
 -- row was last written, which is what a service finds after a cut.
-create type wkf_traversal_status as enum ('running', 'ready', 'completed', 'interrupted');
+do $$ begin
+  create type wkf_traversal_status as enum ('running', 'ready', 'completed', 'interrupted');
+exception when duplicate_object then null;
+end $$;
 
 -- A graph is a row with an identity, not a name copied onto every node and
 -- every edge. A text column copied around is relational in appearance only: no
@@ -97,6 +113,30 @@ create table if not exists wkf_edge (
   foreign key (graph_id, to_node)   references wkf_node (graph_id, id) on delete cascade
 );
 
+-- A route: where a node's handler MAY send the traversal through "next".
+-- Unlike an edge it is never taken by default, and a node may declare several
+-- -- that is the point. A node that declares routes is held to them by the
+-- engine; to_node null says the node may end the traversal there.
+--
+-- Same two composite foreign keys as wkf_edge, for the same reason: a route
+-- between two graphs is a row to refuse. With a null to_node the second one
+-- is not checked (MATCH SIMPLE), which is what "the end" needs.
+create table if not exists wkf_route (
+  graph_id  int not null,
+  from_node int not null,
+  to_node   int,
+  foreign key (graph_id, from_node) references wkf_node (graph_id, id) on delete cascade,
+  foreign key (graph_id, to_node)   references wkf_node (graph_id, id) on delete cascade,
+  constraint a_route_is_not_a_loop check (to_node is distinct from from_node)
+);
+
+-- One row per (node, destination), and one "may end" per node. Two indexes
+-- rather than UNIQUE NULLS NOT DISTINCT, which would require PostgreSQL 15.
+create unique index if not exists wkf_route_once
+  on wkf_route (from_node, to_node) where to_node is not null;
+create unique index if not exists wkf_route_end_once
+  on wkf_route (from_node) where to_node is null;
+
 -- What the schema cannot say:
 --
 --   * acyclicity is not expressible as a constraint. It is checked when the
@@ -112,6 +152,7 @@ create table if not exists wkf_edge (
 -- Note what it does with failure_target: the table holds a node id, the JSON
 -- wants a node name, and the field is left out entirely when there is none --
 -- an explicit null is not the same thing as an absent field to a typed reader.
+-- The same goes for a route's "to", absent when the route is "may end here".
 create or replace function wkf_graph_json(p_graph text) returns jsonb
 language sql stable as $$
   select jsonb_build_object(
@@ -140,7 +181,16 @@ language sql stable as $$
       from wkf_edge e
       join wkf_node a on a.id = e.from_node
       join wkf_node b on b.id = e.to_node
-      where e.graph_id = g.id), '[]'::jsonb))
+      where e.graph_id = g.id), '[]'::jsonb),
+    'routes', coalesce((
+      select jsonb_agg(
+        jsonb_build_object('from', a.name)
+        || case when b.name is null then '{}'::jsonb else jsonb_build_object('to', b.name) end
+        order by a.id, b.id nulls last)
+      from wkf_route r
+      join wkf_node a on a.id = r.from_node
+      left join wkf_node b on b.id = r.to_node
+      where r.graph_id = g.id), '[]'::jsonb))
   from wkf_graph g
   where g.name = p_graph and g.active;
 $$;

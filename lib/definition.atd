@@ -67,6 +67,25 @@ type edge = {
   to_ <json name="to"> : string;
 }
 
+(* Where a node's handler MAY send the traversal through ["next"], written
+   down. A route is a declaration, not a path the engine takes by default:
+   the declared edge stays the only default. What a declaration buys is that
+   routing stops being invisible -- the cycle check, the most expensive path,
+   the orphan warning and the drawing all see it -- and that the engine holds
+   the handler to it: a node that declares routes may name only those, its
+   declared edge, or the end of the traversal if a route without [to] says
+   it may end there. A node that declares none routes freely, as before.
+
+   [to] absent: the node may end the traversal ([next] is null).
+
+   The OCaml fields are [from_node] and [to_node], not [from_] and [to_]: two
+   record types sharing their field names would make a host's
+   [{ Wkf.Graph.from_; to_ }] build a route where it meant an edge. *)
+type route = {
+  from_node <json name="from"> : string;
+  ?to_node <json name="to"> : string option;
+}
+
 type graph = {
   name : string;
   (* The second net: beyond this many visited nodes a traversal stops, whatever
@@ -75,4 +94,5 @@ type graph = {
   ~node_budget <ocaml default="50"> : int;
   nodes : node list;
   ~edges : edge list;
+  ~routes : route list;
 }

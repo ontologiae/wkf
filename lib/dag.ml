@@ -16,8 +16,12 @@ type t = G.t
 (* Divert edges are part of the graph, and that matters twice: a fallback
    branch that loops back to an earlier node IS a cycle, and a fallback branch
    is on some traversal's path, so it counts towards the most expensive one.
-   What is NOT here is routing by [next]: a handler can name any node, and no
-   static check can see it. *)
+   Declared routes are here for the same two reasons: a route back to an
+   earlier node is a cycle the budget would otherwise have to catch at run
+   time, and a routed-to node is on a path. What is NOT here is routing by
+   [next] from a node that declares no route: a handler can name any node, and
+   no static check can see what was never written down. A route without [to]
+   (the node may end the traversal) adds no edge. *)
 let of_definition (g : Definition.t) =
   let with_vertices =
     List.fold_left (fun acc (n : Definition.node) -> G.add_vertex acc n.name) G.empty g.nodes
@@ -27,12 +31,18 @@ let of_definition (g : Definition.t) =
       (fun acc (e : Definition.edge) -> G.add_edge acc e.from_ e.to_)
       with_vertices g.edges
   in
+  let with_fallbacks =
+    List.fold_left
+      (fun acc (n : Definition.node) ->
+        match (n.on_failure, n.failure_target) with
+        | `Divert, Some target -> G.add_edge acc n.name target
+        | _ -> acc)
+      with_edges g.nodes
+  in
   List.fold_left
-    (fun acc (n : Definition.node) ->
-      match (n.on_failure, n.failure_target) with
-      | `Divert, Some target -> G.add_edge acc n.name target
-      | _ -> acc)
-    with_edges g.nodes
+    (fun acc (r : Definition.route) ->
+      match r.to_node with Some target -> G.add_edge acc r.from_node target | None -> acc)
+    with_fallbacks g.routes
 
 let successors t v = if G.mem_vertex t v then G.succ t v else []
 

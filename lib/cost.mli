@@ -17,10 +17,11 @@
     @canonical Wkf.Cost *)
 
 val open_nodes : Loaded.t -> string list
-(** The nodes that {e must} route at runtime: not terminal, and with no
-    declared edge. Nothing static can say where they go, so any bound computed
-    from the declared graph stops being one as soon as a traversal reaches
-    them.
+(** The nodes that {e must} route at runtime: not terminal, with no declared
+    edge and no declared route. Nothing static can say where they go, so any
+    bound computed from the declared graph stops being one as soon as a
+    traversal reaches them. Declaring a node's routes closes it: the engine
+    holds it to them, and the most expensive path counts them.
 
     They are not a mistake -- a routing node is the ordinary shape of an entry
     node -- but they are why {!check_price} has a third verdict. *)

@@ -2,6 +2,8 @@ type node = {
   definition : Definition.node;
   run : Registry.runner;
   edge : string option;
+  routes : string list option;
+  may_end : bool;
 }
 
 type t = {
@@ -19,6 +21,7 @@ type error =
   | Bad_config of { node : string; handler : string; message : string }
   | Unknown_edge_endpoint of { from_ : string; to_ : string; missing : string }
   | Several_edges_from of string
+  | Unknown_route_endpoint of { from_ : string; to_ : string option; missing : string }
   | Unknown_failure_target of { node : string; target : string }
   | Divert_without_target of string
   | Non_positive_node_budget of int
@@ -27,6 +30,7 @@ type error =
 type warning =
   | Unreachable_node of string
   | Terminal_with_edge of string
+  | Terminal_with_route of string
   | No_way_out of string
 
 let string_of_error = function
@@ -43,6 +47,10 @@ let string_of_error = function
       Printf.sprintf "edge %S -> %S: there is no node named %S" from_ to_ missing
   | Several_edges_from n ->
       Printf.sprintf "node %S has more than one outgoing edge; a node has at most one" n
+  | Unknown_route_endpoint { from_; to_; missing } ->
+      Printf.sprintf "route %S -> %s: there is no node named %S" from_
+        (match to_ with Some t -> Printf.sprintf "%S" t | None -> "(end)")
+        missing
   | Unknown_failure_target { node; target } ->
       Printf.sprintf "node %S diverts to %S on failure, and there is no node named %S" node target
         target
@@ -60,6 +68,11 @@ let string_of_warning = function
         n
   | Terminal_with_edge n ->
       Printf.sprintf "node %S is terminal and has an outgoing edge, which will never be followed" n
+  | Terminal_with_route n ->
+      Printf.sprintf
+        "node %S is terminal and declares routes, which will never be taken: a terminal node's \"next\" \
+         is ignored"
+        n
   | No_way_out n ->
       Printf.sprintf
         "node %S is not terminal and has no outgoing edge: unless its handler names a successor, a \
@@ -102,6 +115,30 @@ let index_edges (g : Definition.t) known =
   in
   (table, errors)
 
+(* A route names nodes of this graph, or no node at all for "may end here".
+   Several routes out of one node are the point -- unlike edges -- and a route
+   repeated is harmless, so neither is refused. *)
+let check_routes (g : Definition.t) known =
+  List.concat_map
+    (fun (r : Definition.route) ->
+      let ends = r.from_node :: Option.to_list r.to_node in
+      List.filter_map
+        (fun v ->
+          if Hashtbl.mem known v then None
+          else Some (Unknown_route_endpoint { from_ = r.from_node; to_ = r.to_node; missing = v }))
+        ends)
+    g.routes
+
+(* What the engine holds a node to: [None] when it declares no route (free, as
+   before routes existed), otherwise the nodes it may name and whether it may
+   end the traversal. *)
+let declared_routes (g : Definition.t) name =
+  match Definition.routes_from g name with
+  | [] -> (None, false)
+  | rs ->
+      ( Some (List.sort_uniq String.compare (List.filter_map (fun (r : Definition.route) -> r.to_node) rs)),
+        List.exists (fun (r : Definition.route) -> r.to_node = None) rs )
+
 let check_start (g : Definition.t) =
   match Definition.start_nodes g with
   | [ n ] -> (Some n.name, [])
@@ -123,6 +160,7 @@ let of_graph ?(registry = Registry.default) (g : Definition.t) =
     if g.node_budget <= 0 then [ Non_positive_node_budget g.node_budget ] else []
   in
   let policy_errors = List.concat_map (check_failure_policy known) g.nodes in
+  let route_errors = check_routes g known in
   (* Resolving the handler and reading the configuration happen here, once, and
      never again: that is the whole point of § "the validation happens when the
      graph is loaded, not during a traversal". *)
@@ -132,8 +170,9 @@ let of_graph ?(registry = Registry.default) (g : Definition.t) =
       (fun (n : Definition.node) ->
         match Registry.prepare ~registry n.handler n.config with
         | Ok run ->
+            let routes, may_end = declared_routes g n.name in
             Hashtbl.replace prepared n.name
-              { definition = n; run; edge = Hashtbl.find_opt edges n.name };
+              { definition = n; run; edge = Hashtbl.find_opt edges n.name; routes; may_end };
             None
         | Error message ->
             if Registry.mem ~registry n.handler then
@@ -141,7 +180,9 @@ let of_graph ?(registry = Registry.default) (g : Definition.t) =
             else Some (Unknown_handler { node = n.name; handler = n.handler }))
       g.nodes
   in
-  let structural = duplicate_errors @ edge_errors @ start_errors @ budget_errors @ policy_errors in
+  let structural =
+    duplicate_errors @ edge_errors @ route_errors @ start_errors @ budget_errors @ policy_errors
+  in
   match (structural, start) with
   | [], Some start ->
       (* The graph holds together; only now do cycles and reachability mean
@@ -163,6 +204,7 @@ let of_graph ?(registry = Registry.default) (g : Definition.t) =
                (fun (n : Definition.node) ->
                  n.on_failure = `Divert && n.failure_target = Some name)
                g.nodes
+          || List.exists (fun (r : Definition.route) -> r.to_node = Some name) g.routes
         in
         let warnings =
           List.filter_map
@@ -174,8 +216,15 @@ let of_graph ?(registry = Registry.default) (g : Definition.t) =
               (fun (n : Definition.node) ->
                 match (n.terminal, Hashtbl.find_opt edges n.name) with
                 | true, Some _ -> Some (Terminal_with_edge n.name)
-                | false, None -> Some (No_way_out n.name)
+                (* A node whose routes are declared has a way out written down. *)
+                | false, None when Definition.routes_from g n.name = [] -> Some (No_way_out n.name)
                 | _ -> None)
+              g.nodes
+          @ List.filter_map
+              (fun (n : Definition.node) ->
+                if n.terminal && Definition.routes_from g n.name <> [] then
+                  Some (Terminal_with_route n.name)
+                else None)
               g.nodes
         in
         Ok ({ graph = g; start; nodes = prepared; dag }, warnings)

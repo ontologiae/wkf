@@ -32,11 +32,17 @@ type node = Definition_t.node = {
 
 type edge = Definition_t.edge = { from_ : string; to_ : string }
 
+type route = Definition_t.route = { from_node : string; to_node : string option }
+(** Where a node's handler may send the traversal through ["next"]; [to_node = None]
+    says it may end the traversal there. A node that declares routes is held to
+    them by the engine; one that declares none routes freely. *)
+
 type graph = Definition_t.graph = {
   name : string;
   node_budget : int;  (** a traversal stops beyond this many visited nodes *)
   nodes : node list;
   edges : edge list;
+  routes : route list;  (** declared, never followed by default *)
 }
 
 type t = graph
@@ -44,6 +50,10 @@ type t = graph
 val node : t -> string -> node option
 val node_names : t -> string list
 val start_nodes : t -> node list
+
+val routes_from : t -> string -> route list
+(** The routes a node declares, in the order written. [[]] means it declares
+    none -- which is not the same as declaring that it never routes. *)
 
 val successor : t -> string -> string option
 (** The declared edge out of a node, if it has one. A node may legitimately

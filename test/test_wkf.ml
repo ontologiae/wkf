@@ -8,12 +8,14 @@ let node ?(handler = "echo") ?(config = `Assoc []) ?(max_cost = 0) ?(on_failure 
     =
   { name; handler; config; max_cost; on_failure; failure_target; on_resume; start; terminal }
 
-let graph ?(name = "g") ?(node_budget = 50) nodes edges : Wkf.Graph.t =
+(* [routes] pairs a node with where it may go, [None] for "may end here". *)
+let graph ?(name = "g") ?(node_budget = 50) ?(routes = []) nodes edges : Wkf.Graph.t =
   {
     name;
     node_budget;
     nodes;
     edges = List.map (fun (from_, to_) -> { Wkf.Graph.from_; to_ }) edges;
+    routes = List.map (fun (from_node, to_node) -> { Wkf.Graph.from_node; to_node }) routes;
   }
 
 let load g = Wkf.Loaded.of_graph ~registry g
@@ -857,6 +859,134 @@ let the_graph_can_be_drawn () =
   Alcotest.(check bool) "the nodes are there" true (has "\"a\"" && has "\"out\"");
   Alcotest.(check bool) "the fallback branch is marked" true (has "on failure")
 
+
+(* ------------------------------------------------------------------ *)
+(* Declared routes.                                                     *)
+
+let routes_are_read_from_json () =
+  let json =
+    {|{ "name": "turn",
+        "nodes": [ { "name": "triage", "handler": "echo", "start": true },
+                   { "name": "long", "handler": "echo", "terminal": true } ],
+        "routes": [ { "from": "triage", "to": "long" }, { "from": "triage" } ] }|}
+  in
+  match Wkf.Graph.of_json_string json with
+  | Error e -> Alcotest.failf "the graph was refused: %s" e
+  | Ok g ->
+      Alcotest.(check (list (pair string (option string))))
+        "a route with a destination, and one that ends"
+        [ ("triage", Some "long"); ("triage", None) ]
+        (List.map (fun (r : Wkf.Graph.route) -> (r.from_node, r.to_node)) g.routes)
+
+let refuses_a_route_that_leaves_the_graph () =
+  let g =
+    graph ~routes:[ ("a", Some "nowhere") ] [ node ~start:true "a"; node ~terminal:true "out" ] [ ("a", "out") ]
+  in
+  match errors_of g with
+  | [ Wkf.Loaded.Unknown_route_endpoint { from_ = "a"; to_ = Some "nowhere"; missing = "nowhere" } ] -> ()
+  | es -> Alcotest.failf "unexpected: %s" (String.concat "; " (List.map Wkf.Loaded.string_of_error es))
+
+let a_route_back_is_a_cycle () =
+  (* Without the declaration this loop is only caught at run time, by the node
+     budget. Declared, it is a refusal that names its nodes. *)
+  let g =
+    graph ~routes:[ ("b", Some "a") ] [ node ~start:true "a"; node "b"; node ~terminal:true "out" ] [ ("a", "b") ]
+  in
+  match errors_of g with
+  | [ Wkf.Loaded.Cycle [ "a"; "b" ] ] -> ()
+  | es -> Alcotest.failf "unexpected: %s" (String.concat "; " (List.map Wkf.Loaded.string_of_error es))
+
+let a_routed_to_node_is_no_orphan_once_declared () =
+  let g =
+    graph
+      ~routes:[ ("triage", Some "study"); ("triage", Some "note") ]
+      [ node ~start:true "triage"; node ~terminal:true "study"; node ~terminal:true "note" ]
+      []
+  in
+  let _, warnings = load_ok g in
+  Alcotest.(check (list string)) "no warning at all" [] (List.map Wkf.Loaded.string_of_warning warnings)
+
+let a_declared_route_is_taken () =
+  let g =
+    graph
+      ~routes:[ ("triage", Some "study"); ("triage", Some "note") ]
+      [ node ~start:true ~config:(`Assoc [ ("next", `String "note") ]) "triage";
+        node ~terminal:true "study"; node ~terminal:true "note" ]
+      []
+  in
+  let loaded, _ = load_ok g in
+  check_visited [ "triage"; "note" ] (run loaded)
+
+let an_undeclared_route_interrupts () =
+  let g =
+    graph ~routes:[ ("triage", Some "study") ]
+      [ node ~start:true ~config:(`Assoc [ ("next", `String "note") ]) "triage";
+        node ~terminal:true "study"; node ~terminal:true "note" ]
+      []
+  in
+  let loaded, _ = load_ok g in
+  match run loaded with
+  | Wkf.Engine.Interrupted { node = "triage"; reason; _ } ->
+      Alcotest.(check bool) "the reason names the undeclared successor" true
+        (try ignore (Str.search_forward (Str.regexp_string "\"note\"") reason 0); true with Not_found -> false)
+  | _ -> Alcotest.fail "a node that named an undeclared successor was followed"
+
+let the_declared_edge_needs_no_route () =
+  let g =
+    graph ~routes:[ ("a", Some "side") ]
+      [ node ~start:true ~config:(`Assoc [ ("next", `String "out") ]) "a";
+        node ~terminal:true "side"; node ~terminal:true "out" ]
+      [ ("a", "out") ]
+  in
+  let loaded, _ = load_ok g in
+  check_visited [ "a"; "out" ] (run loaded)
+
+let ending_has_to_be_declared_too () =
+  let stops routes =
+    let g =
+      graph ~routes [ node ~start:true ~config:(`Assoc [ ("next", `Null) ]) "a"; node ~terminal:true "out" ] [ ("a", "out") ]
+    in
+    match run (fst (load_ok g)) with Wkf.Engine.Completed _ -> `Completed | Wkf.Engine.Interrupted _ -> `Interrupted
+  in
+  Alcotest.(check bool) "declared routes without an end: interrupted" true (stops [ ("a", Some "out") ] = `Interrupted);
+  Alcotest.(check bool) "with a route to the end: completed" true (stops [ ("a", None) ] = `Completed);
+  Alcotest.(check bool) "no route declared at all: completed, as before" true (stops [] = `Completed)
+
+let declared_routes_close_the_bound () =
+  (* The routing entry node of a_routing_node_makes_the_bound_a_lower_bound,
+     with its routes written down: the bound is a bound again, and counts the
+     most expensive route. *)
+  let g =
+    graph
+      ~routes:[ ("triage", Some "long"); ("triage", Some "short") ]
+      [
+        node ~start:true ~max_cost:1 "triage";
+        node ~max_cost:90 ~terminal:true "long";
+        node ~max_cost:2 ~terminal:true "short";
+      ]
+      []
+  in
+  let loaded, _ = load_ok g in
+  Alcotest.(check (list string)) "no open node" [] (Wkf.Cost.open_nodes loaded);
+  match Wkf.Cost.check_price loaded ~price:30 with
+  | Wkf.Cost.Over { cost = 91; price = 30 } -> ()
+  | v -> Alcotest.failf "unexpected: %s" (Wkf.Cost.string_of_verdict v)
+
+let routes_and_annotations_are_drawn () =
+  let g =
+    graph ~name:"say \"hi\""
+      ~routes:[ ("triage", Some "long"); ("triage", None) ]
+      [ node ~start:true "triage"; node ~terminal:true "long"; node ~terminal:true "end" ]
+      [ ("triage", "end") ]
+  in
+  let dot = Wkf.Dot.of_graph ~annotate:(fun n -> if n.name = "long" then [ {|prompt="x"|} ] else []) g in
+  let has s = try ignore (Str.search_forward (Str.regexp_string s) dot 0); true with Not_found -> false in
+  Alcotest.(check bool) "a route is a dotted arrow" true
+    (has {|"triage" -> "long" [fontsize=10, label="route", style="dotted"|});
+  Alcotest.(check bool) "the end vertex does not take the name of a node" true (has {|"triage" -> "end'"|});
+  Alcotest.(check bool) "an annotation is escaped" true (has {|prompt=\"x\"|});
+  Alcotest.(check bool) "the title is escaped" true (has {|say \"hi\"|})
+
 (* ------------------------------------------------------------------ *)
 
 let case name f = Alcotest.test_case name `Quick f
@@ -937,5 +1067,19 @@ let () =
           case "a resumed traversal writes its own state" a_resumed_traversal_writes_its_own_state_down;
         ] );
       ("the registry", [ case "a name is registered once" registering_a_name_twice_is_refused ]);
-      ("drawing", [ case "DOT comes out" the_graph_can_be_drawn ]);
+      ( "declared routes",
+        [
+          case "read from JSON, with and without a destination" routes_are_read_from_json;
+          case "a route that leaves the graph is refused" refuses_a_route_that_leaves_the_graph;
+          case "a route back is a cycle, named" a_route_back_is_a_cycle;
+          case "a routed-to node is no orphan once declared" a_routed_to_node_is_no_orphan_once_declared;
+          case "a declared route is taken" a_declared_route_is_taken;
+          case "an undeclared one interrupts" an_undeclared_route_interrupts;
+          case "the declared edge needs no route" the_declared_edge_needs_no_route;
+          case "ending has to be declared too" ending_has_to_be_declared_too;
+          case "they close the cost bound" declared_routes_close_the_bound;
+        ] );
+      ( "drawing",
+        [ case "DOT comes out" the_graph_can_be_drawn;
+          case "routes, the end and annotations, escaped" routes_and_annotations_are_drawn ] );
     ]

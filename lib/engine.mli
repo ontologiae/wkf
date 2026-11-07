@@ -62,7 +62,9 @@ val run :
     A traversal ends when a terminal node has returned, when a handler names
     [`Null] as its successor, or -- as an interruption -- when a node fails
     under a [`Stop] policy, when a node has no way out, when a handler names a
-    node that does not exist, when a handler breaks the contract on a reserved
+    node that does not exist, when a node that declares routes names a node
+    they do not include or ends without a route saying it may (see
+    {!Graph.route}), when a handler breaks the contract on a reserved
     field, when a checkpoint could not be written, or when the graph's node
     budget is exhausted.
 

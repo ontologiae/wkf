@@ -121,6 +121,10 @@ let graph_json =
     { "from": "study",  "to": "polish" },
     { "from": "note",   "to": "polish" },
     { "from": "polish", "to": "done" }
+  ],
+  "routes": [
+    { "from": "triage", "to": "study" },
+    { "from": "triage", "to": "note" }
   ] }
 |}
 

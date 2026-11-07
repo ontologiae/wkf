@@ -11,6 +11,8 @@ let node_names (g : t) = List.map (fun (n : node) -> n.name) g.nodes
 
 let start_nodes (g : t) = List.filter (fun (n : node) -> n.start) g.nodes
 
+let routes_from (g : t) name = List.filter (fun (r : route) -> String.equal r.from_node name) g.routes
+
 let successor (g : t) name =
   match List.find_opt (fun (e : edge) -> String.equal e.from_ name) g.edges with
   | Some e -> Some e.to_

@@ -25,6 +25,10 @@ type node = private {
   definition : Definition.node;
   run : Registry.runner;  (** the handler, with its configuration already read *)
   edge : string option;  (** the declared successor, if there is one *)
+  routes : string list option;
+      (** the nodes its handler may name through ["next"], when it declares
+          routes; [None] when it declares none, and then it may name any node *)
+  may_end : bool;  (** a route without [to] lets it end the traversal *)
 }
 
 type t
@@ -39,6 +43,7 @@ type error =
   | Several_edges_from of string
       (** One outgoing edge per node. Several would be a condition table by
           another door, and the choice belongs to the handlers. *)
+  | Unknown_route_endpoint of { from_ : string; to_ : string option; missing : string }
   | Unknown_failure_target of { node : string; target : string }
   | Divert_without_target of string
   | Non_positive_node_budget of int
@@ -52,10 +57,12 @@ type warning =
           warning on the nodes the entry node routes to, and read it for what
           it is. *)
   | Terminal_with_edge of string
+  | Terminal_with_route of string
   | No_way_out of string
-      (** A non-terminal node with no outgoing edge. Legitimate when its
-          handler always names its own successor; a dead end otherwise, and the
-          traversal will say so when it gets there. *)
+      (** A non-terminal node with no outgoing edge and no declared route.
+          Legitimate when its handler always names its own successor; a dead
+          end otherwise, and the traversal will say so when it gets there.
+          Declaring the routes is what silences it. *)
 
 val string_of_error : error -> string
 val string_of_warning : warning -> string
@@ -71,7 +78,7 @@ val find : t -> string -> node option
 val node_names : t -> string list
 
 val successors : t -> string -> string list
-(** The declared edge and the fallback branch, which is what the static checks
-    and {!Wkf.Cost} see. Routing by ["next"] is invisible to them by
-    construction: a handler may name any node, and the node budget is what
-    stands behind that. *)
+(** The declared edge, the fallback branch and the declared routes, which is
+    what the static checks and {!Wkf.Cost} see. Routing by ["next"] from a node
+    that declares no route is invisible to them by construction: such a handler
+    may name any node, and the node budget is what stands behind that. *)
